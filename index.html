@@ -103,6 +103,18 @@
   .err{color:var(--warn);font-family:var(--mono);font-size:12px;margin-top:12px;display:none}
   .err.on{display:block}
 
+  .banner{margin-top:12px;padding:11px 14px;border-radius:10px;font-family:var(--mono);font-size:12px;line-height:1.6;
+    background:rgba(255,176,32,.08);border:1px solid rgba(255,176,32,.35);color:#ffd591}
+  .banner b{color:#fff}
+  .banner a{color:var(--link);text-decoration:none;border-bottom:1px solid rgba(25,240,200,.4)}
+
+  .dl{display:none;margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--link);
+    text-decoration:none;border:1px solid var(--link);border-radius:9px;padding:10px 14px;text-align:center;
+    background:rgba(25,240,200,.06)}
+  .dl:hover{background:rgba(25,240,200,.14)}
+  .dl.hidden{display:none}
+  .dl:not(.hidden){display:block}
+
   /* Loading overlay + progress bar */
   .loader{display:none;margin-top:14px;border:1px solid var(--line);border-radius:14px;
     background:linear-gradient(180deg,var(--panel),#0d1117);padding:30px 26px}
@@ -190,6 +202,7 @@
   </div>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div id="err" class="err"></div>
+  <div id="banner" class="banner hidden"></div>
 
   <!-- Loading -->
   <div id="loader" class="loader">
@@ -316,6 +329,7 @@
         <div class="prog"><i id="exportBar"></i></div>
         <div class="ls" id="exportSub">Recording the trimmed range in real time — keep this tab focused.</div>
       </div>
+      <a id="dlLink" class="dl hidden" download>⤓ Download</a>
       <p class="fontline" id="exportNote">Burns the current overlay (OSD<span id="exNoteSub"></span>) into a new file at native resolution. Records in real time; the trimmed range plays through once.</p>
     </div>
   </div>
@@ -621,6 +635,28 @@ function showErr(msg){ err.textContent=msg; err.classList.add('on'); }
 function clearErr(){ err.classList.remove('on'); }
 function fmtDur(ms){ const s=Math.round(ms/1000); return (s/60|0)+":"+String(s%60).padStart(2,'0'); }
 
+/* Running inside an embedded (sandboxed) preview? Downloads/recording are often blocked there. */
+const EMBEDDED = (()=>{ try{ return window.self!==window.top; }catch(e){ return true; } })();
+
+/* Trigger a download AND surface a clickable link (sandbox-safe fallback). */
+function downloadBlob(blob, filename, linkEl){
+  const url=URL.createObjectURL(blob);
+  let clicked=false;
+  try{
+    const a=document.createElement('a');
+    a.href=url; a.download=filename; a.rel="noopener";
+    document.body.appendChild(a);          // some browsers require it in the DOM
+    a.click(); a.remove(); clicked=true;
+  }catch(e){ clicked=false; }
+  if(linkEl){                              // persistent, user-clickable fallback
+    linkEl.href=url; linkEl.download=filename;
+    linkEl.textContent="⤓ "+filename+"  ("+(blob.size/1048576).toFixed(1)+" MB)";
+    linkEl.classList.remove('hidden');
+    linkEl.onclick=()=>{};                 // real user click = allowed even when programmatic is blocked
+  }
+  return {url, clicked};
+}
+
 function showLoader(title){ $('loaderTitle').textContent=title||"Reading clip…"; $('loaderPct').textContent="";
   prog.classList.remove('indet'); progBar.style.width="0%"; loader.classList.add('on'); }
 function setProgress(frac){ $('loaderPct').textContent=Math.round(frac*100)+"%"; progBar.style.width=(frac*100)+"%"; }
@@ -841,8 +877,11 @@ async function intake(fileList){
     srt = srts.find(s=>stemKey(s.name)===vk) || (srts.length===1 ? srts[0] : null);
   }
   await handleVideo(vid);
-  if(srt) await loadSrt(srt, true);
-  else tryAdjacentSrt(vid.name);          // deployed-beside-page fallback
+  if(srt){ await loadSrt(srt, true); }
+  else {
+    tryAdjacentSrt(vid.name);              // deployed-beside-page fallback
+    $('srtStatus').textContent="none — drop the .srt or the folder to auto-load";
+  }
 }
 
 /* read dropped FileSystemEntry trees (folders) into a flat file list */
@@ -882,13 +921,18 @@ fileIn.addEventListener('change',e=>{ if(e.target.files.length) intake(e.target.
 ['dragleave'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
 function onDrop(e){
   e.preventDefault(); drop.classList.remove('hot');
-  const items=e.dataTransfer.items;
-  if(items && items.length && items[0].webkitGetAsEntry){
-    const entries=[];                     // must read entries synchronously in the event
-    for(const it of items){ const en=it.webkitGetAsEntry?it.webkitGetAsEntry():null; if(en) entries.push(en); else { const f=it.getAsFile&&it.getAsFile(); if(f) entries.push(f);} }
-    gatherEntries(entries).then(intake);
+  const dt=e.dataTransfer;
+  const plain = dt.files ? [...dt.files] : [];
+  let entries=null;
+  if(dt.items && dt.items.length && dt.items[0].webkitGetAsEntry){
+    entries=[];
+    for(const it of dt.items){ const en=it.webkitGetAsEntry?it.webkitGetAsEntry():null; if(en) entries.push(en); }
+  }
+  // only walk the entry tree when a folder was dropped; otherwise plain files are simpler/robust
+  if(entries && entries.some(en=>en && en.isDirectory)){
+    gatherEntries(entries).then(list=>intake(list.length?list:plain));
   }else{
-    intake(e.dataTransfer.files);
+    intake(plain.length?plain:(entries||[]));
   }
 }
 drop.addEventListener('drop',onDrop);
@@ -928,6 +972,8 @@ function applySrt(cues, name, auto){
   $('srtStatus').textContent=`${tag}${name} · ${cues.length} cues`;
   $('srtStatus').style.color="var(--link)";
   if(durMs) updateTrimUI();
+  $('strip').classList.add('on');
+  updateStrip(video.currentTime*1000||0);
   clearErr(); draw();
 }
 $('subShow').addEventListener('change',draw);
@@ -936,9 +982,7 @@ $('subShow').addEventListener('change',draw);
 $('osdBtn').addEventListener('click',()=>{
   if(!decoded) return;
   const blob=buildOsdFile(decoded.frames, decoded.firmware);
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download='extracted.osd'; a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  downloadBlob(blob, baseStem(currentName)+".osd", $('dlLink'));
 });
 
 /* new file */
@@ -1017,37 +1061,51 @@ function setExporting(on){
 }
 async function exportVideo(){
   if(!decoded || exporting) return;
+  clearErr();
+  // feature checks with visible messaging
+  if(typeof HTMLCanvasElement.prototype.captureStream!=='function'){
+    showErr("This browser can't capture a canvas stream — open the page in a normal tab/modern browser to export."); return;
+  }
+  if(!window.MediaRecorder){ showErr("This browser has no MediaRecorder — export needs Chrome, Edge, Firefox or Safari 14.1+."); return; }
   const mime=pickMime();
-  if(mime===null){ showErr("This browser can't record video (no MediaRecorder)."); return; }
   const W=video.videoWidth, H=video.videoHeight;
   const ec=document.createElement('canvas'); ec.width=W; ec.height=H;
   const ectx=ec.getContext('2d');
   const inS=trimIn/1000, outS=Math.max(trimIn+200,trimOut)/1000;
 
-  const stream=ec.captureStream(60);
+  let stream;
+  try{ stream=ec.captureStream(60); }
+  catch(e){ showErr("captureStream failed: "+e.message); return; }
   let hasAudio=false;
-  try{ if(video.captureStream){ const vs=video.captureStream();
-        vs.getAudioTracks().forEach(t=>{ stream.addTrack(t); hasAudio=true; }); } }catch(e){}
-  video.muted = !hasAudio;                       // avoid blasting; silent clips just mute
+  try{ const grab=video.captureStream||video.mozCaptureStream;
+       if(grab){ grab.call(video).getAudioTracks().forEach(t=>{ stream.addTrack(t); hasAudio=true; }); } }catch(e){}
+  video.muted = !hasAudio;
 
   let rec;
   try{ rec=new MediaRecorder(stream, Object.assign({videoBitsPerSecond:20000000}, mime?{mimeType:mime}:{})); }
-  catch(e){ showErr("Recorder init failed: "+e.message); return; }
+  catch(e){ showErr("Recorder init failed: "+e.message+" — try a different browser."); return; }
   const chunks=[]; rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+  rec.onerror=e=>{ showErr("Recorder error: "+(e.error&&e.error.name||"unknown")); finish(); };
 
+  $('dlLink').classList.add('hidden');
   setExporting(true);
-  $('exportLabel').textContent="Encoding "+fmtT(trimOut-trimIn)+"…";
+  $('exportLabel').textContent="Recording "+fmtT(trimOut-trimIn)+"…";
+  $('exportSub').textContent= EMBEDDED
+    ? "Heads up: downloads are blocked inside the embedded preview — a Download link will appear; or open this page in its own tab."
+    : "Recording the trimmed range in real time — keep this tab focused.";
 
   let stopped=false;
-  const finish=()=>{ if(stopped) return; stopped=true; try{rec.stop();}catch(e){} video.pause(); };
+  function finish(){ if(stopped) return; stopped=true; try{rec.stop();}catch(e){} try{video.pause();}catch(e){} }
   rec.onstop=()=>{
+    video.muted=false; setExporting(false);
+    if(!chunks.length){ showErr("Export produced no data — the embedded preview likely blocked recording. Open the page in a real tab and retry."); return; }
     const ext = mime && mime.indexOf('mp4')>=0 ? 'mp4' : 'webm';
     const blob=new Blob(chunks,{type:(mime||'video/webm').split(';')[0]});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-    a.download=baseStem(currentName)+"_osd."+ext; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
-    video.muted=false; setExporting(false);
-    $('exportSub').textContent=`Saved ${a.download} (${(blob.size/1048576).toFixed(1)} MB).`;
+    const name=baseStem(currentName)+"_osd."+ext;
+    const {clicked}=downloadBlob(blob, name, $('dlLink'));
+    $('exportSub').textContent = clicked
+      ? `Saved ${name} (${(blob.size/1048576).toFixed(1)} MB). If it didn't save, use the link below.`
+      : `Ready: ${name} (${(blob.size/1048576).toFixed(1)} MB) — click the link below to save.`;
   };
 
   const paintFrame=()=>{
@@ -1067,20 +1125,31 @@ async function exportVideo(){
     useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
   };
 
-  // seek to in-point, then record while playing to out-point
-  video.pause();
-  const seekDone=new Promise(res=>{ const h=()=>{ video.removeEventListener('seeked',h); res(); }; video.addEventListener('seeked',h); });
-  video.currentTime=inS;
-  await seekDone;
-  paintFrame();                                   // prime first frame
-  rec.start(120);
-  try{ await video.play(); }catch(e){ showErr("Couldn't start playback for export: "+e.message); finish(); return; }
-  useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+  try{
+    video.pause();
+    const seekDone=new Promise(res=>{ const h=()=>{ video.removeEventListener('seeked',h); res(); };
+      video.addEventListener('seeked',h); setTimeout(res,1500); });   // don't hang if 'seeked' never fires
+    video.currentTime=inS; await seekDone;
+    paintFrame();
+    rec.start(120);
+    await video.play();
+    useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+    // safety stop in case the end is never reached
+    setTimeout(()=>{ if(!stopped && video.paused) finish(); }, (outS-inS)*1000+4000);
+  }catch(e){
+    showErr("Couldn't start export: "+e.message+(EMBEDDED?" (autoplay/recording may be blocked in the embedded preview — open in a tab).":""));
+    finish(); setExporting(false);
+  }
 }
 $('exportBtn').addEventListener('click',exportVideo);
 
-/* bootstrap: auto-load default fonts sitting beside the page (if present) */
+/* bootstrap: sandbox notice + auto-load default fonts sitting beside the page (if present) */
 (async function(){
+  if(EMBEDDED){
+    $('banner').innerHTML="<b>Heads up:</b> you're viewing this inside an embedded preview, where browsers block file downloads and may block video recording. "+
+      "For SRT auto-pairing and OSD export, open this page in its own browser tab (or download the .html and open it locally / deploy it).";
+    $('banner').classList.remove('hidden');
+  }
   await Promise.all([
     tryDefaultFont(fontHD, DEFAULT_FONTS.hd),
     tryDefaultFont(fontSD, DEFAULT_FONTS.sd)
