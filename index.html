@@ -128,6 +128,47 @@
   footer{margin-top:34px;color:var(--faint);font-size:12px;font-family:var(--mono);letter-spacing:.02em;line-height:1.7}
   footer .accent{color:var(--muted)}
   .hidden{display:none}
+
+  /* Telemetry strip (from .srt) */
+  .strip{display:none;margin-top:12px;grid-template-columns:repeat(8,1fr);gap:8px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .strip.on{display:grid}
+  @media (max-width:760px){.strip.on{grid-template-columns:repeat(4,1fr)}}
+  .tcell{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
+    padding:6px 2px;border-radius:9px;background:#0d1117;border:1px solid var(--line-soft)}
+  .ticon{height:22px;display:flex;align-items:center;justify-content:center;color:var(--link)}
+  .ticon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .tv{font-family:var(--mono);font-size:15px;color:var(--ink);font-weight:600;line-height:1}
+  .tl{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+  .sigbars{display:flex;align-items:flex-end;gap:2px;height:18px}
+  .sigbars > i{width:3.5px;background:#2a333d;border-radius:1px;transition:background .12s}
+  .sigbars > i:nth-child(1){height:25%}
+  .sigbars > i:nth-child(2){height:50%}
+  .sigbars > i:nth-child(3){height:75%}
+  .sigbars > i:nth-child(4){height:100%}
+  .sigbars > i.on{background:var(--link);box-shadow:0 0 6px rgba(25,240,200,.5)}
+
+  /* Export / trim card */
+  .card.export{margin-top:14px}
+  .trim-track{position:relative;height:38px;border-radius:9px;background:#0d1117;border:1px solid var(--line-soft);
+    margin-top:4px;cursor:pointer;
+    background-image:repeating-linear-gradient(90deg,rgba(255,255,255,.03) 0 1px,transparent 1px 8%)}
+  .trim-range{position:absolute;top:0;bottom:0;background:rgba(25,240,200,.16);border-left:2px solid var(--link);border-right:2px solid var(--link)}
+  .trim-handle{position:absolute;top:50%;width:14px;height:26px;margin-left:-7px;transform:translateY(-50%);
+    background:var(--link);border-radius:4px;cursor:ew-resize;box-shadow:0 0 10px rgba(25,240,200,.45);touch-action:none}
+  .trim-handle::after{content:"";position:absolute;left:5px;top:7px;width:1px;height:12px;background:#04201b;box-shadow:2px 0 #04201b,-2px 0 #04201b}
+  .trim-play{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn);box-shadow:0 0 8px var(--warn);pointer-events:none;left:0}
+  .trim-times{display:flex;justify-content:space-between;margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .trim-times b{color:var(--link);font-weight:600}
+  .trim-times .mid{color:var(--faint)}
+
+  .export-prog{display:none;margin-top:14px}
+  .export-prog.on{display:block}
+  .export-prog .lt{font-family:var(--mono);font-size:12px;display:flex;justify-content:space-between;margin-bottom:8px}
+  .export-prog .pct{color:var(--link)}
+  .export-prog .ls{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:8px}
+
+  footer{margin-top:34px}
 </style>
 </head>
 <body>
@@ -142,12 +183,12 @@
   </header>
 
   <!-- Intake -->
-  <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose or drop an MP4">
+  <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose or drop files">
     <div class="reticle"></div>
     <div class="big">Drop an ArtLynk .mp4</div>
-    <div class="sub">or click to choose a file — nothing is uploaded</div>
+    <div class="sub">drop the folder or both files together and the matching .srt loads itself — nothing is uploaded</div>
   </div>
-  <input id="file" type="file" accept="video/mp4,video/*" class="hidden" />
+  <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div id="err" class="err"></div>
 
   <!-- Loading -->
@@ -165,6 +206,42 @@
       <div class="subbar" id="subbar"><span id="subtext"></span></div>
       <div class="grain"></div>
       <div class="vig"></div>
+    </div>
+
+    <!-- Telemetry strip (from .srt) -->
+    <div id="strip" class="strip">
+      <div class="tcell">
+        <div class="ticon"><div id="sigbars" class="sigbars"><i></i><i></i><i></i><i></i></div></div>
+        <div class="tv" id="t_signal">—</div><div class="tl">Signal</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><path d="M9 3v18M15 3v18M4 8h16M4 16h16"/></svg></div>
+        <div class="tv" id="t_ch">—</div><div class="tl">Channel</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <div class="tv" id="t_ft">—</div><div class="tl">Flight time</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 10v4"/><path d="M6 12h6"/></svg></div>
+        <div class="tv" id="t_sbat">—</div><div class="tl">Craft batt</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="9" rx="3"/><path d="M7 15l-1 3M17 15l1 3"/><circle cx="8" cy="10.5" r="1.6"/><circle cx="16" cy="10.5" r="1.6"/></svg></div>
+        <div class="tv" id="t_gbat">—</div><div class="tl">Goggle batt</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg></div>
+        <div class="tv" id="t_bitrate">—</div><div class="tl">Bitrate</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></div>
+        <div class="tv" id="t_distance">—</div><div class="tl">Distance</div>
+      </div>
+      <div class="tcell">
+        <div class="ticon"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg></div>
+        <div class="tv" id="t_mode">—</div><div class="tl">Mode</div>
+      </div>
     </div>
 
     <div class="console">
@@ -209,6 +286,37 @@
           <div class="stat"><div class="k">Grid</div><div class="v">53 × 20</div></div>
         </div>
       </div>
+    </div>
+
+    <!-- Export -->
+    <div class="card export">
+      <h2>Trim &amp; export — burn OSD into video</h2>
+      <div class="trim" id="trim">
+        <div class="trim-track" id="trimTrack">
+          <div class="trim-range" id="trimRange"></div>
+          <div class="trim-handle in" id="trimIn" tabindex="0" role="slider" aria-label="Trim start"></div>
+          <div class="trim-handle out" id="trimOut" tabindex="0" role="slider" aria-label="Trim end"></div>
+          <div class="trim-play" id="trimPlay"></div>
+        </div>
+        <div class="trim-times">
+          <span>In <b id="tIn">0:00.0</b></span>
+          <span class="mid" id="tLen">full clip</span>
+          <span>Out <b id="tOut">0:00.0</b></span>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn ghost" id="setIn">Set in ⤓</button>
+        <button class="btn ghost" id="setOut">Set out ⤒</button>
+        <button class="btn ghost" id="trimReset">Reset</button>
+        <span style="flex:1"></span>
+        <button class="btn" id="exportBtn" disabled>Export with OSD ▶</button>
+      </div>
+      <div class="export-prog" id="exportProg">
+        <div class="lt"><span id="exportLabel">Encoding…</span><span class="pct" id="exportPct"></span></div>
+        <div class="prog"><i id="exportBar"></i></div>
+        <div class="ls" id="exportSub">Recording the trimmed range in real time — keep this tab focused.</div>
+      </div>
+      <p class="fontline" id="exportNote">Burns the current overlay (OSD<span id="exNoteSub"></span>) into a new file at native resolution. Records in real time; the trimmed range plays through once.</p>
     </div>
   </div>
 
@@ -416,7 +524,7 @@ function parseSrt(text){
     const tl=lines[i]||""; const mm=tl.match(/-->/);
     if(!mm) continue;
     const [start,end]=tl.split("-->");
-    const body=lines.slice(i+1).join("  ").replace(/<[^>]+>/g,"").trim(); // strip tags
+    const body=lines.slice(i+1).join("  ").replace(/<[^>]+>/g,"").replace(/\s+/g," ").trim(); // strip tags, tidy spacing
     if(body) cues.push({s:tc(start), e:tc(end), text:body});
   }
   cues.sort((a,b)=>a.s-b.s);
@@ -505,6 +613,9 @@ const video=$('video'), canvas=$('osd'), ctx=canvas.getContext('2d');
 const loader=$('loader'), prog=$('prog'), progBar=$('progBar');
 let decoded=null, lastIdx=-1, raf=0;
 let srtCues=null;                 // parsed SRT or null
+let currentName="clip";
+let durMs=0, trimIn=0, trimOut=0; // trim range (ms)
+let exporting=false;
 
 function showErr(msg){ err.textContent=msg; err.classList.add('on'); }
 function clearErr(){ err.classList.remove('on'); }
@@ -529,6 +640,7 @@ function readWithProgress(file){
 
 async function handleVideo(file){
   clearErr();
+  currentName=file.name||"clip";
   drop.classList.add('hidden');
   stage.classList.remove('on');
   showLoader("Reading "+(file.name||"clip")+"…");
@@ -558,6 +670,8 @@ async function handleVideo(file){
     canvas.width=video.videoWidth; canvas.height=video.videoHeight;
     $('sRes').textContent=video.videoWidth+"×"+video.videoHeight;
     updateFontStatus();
+    initTrim(video.duration*1000);
+    $('exportBtn').disabled=false;
     draw();
   },{once:true});
 
@@ -591,13 +705,14 @@ function frameAt(ms){
 
 function draw(){
   if(!decoded){ return; }
-  const show=$('show').checked;
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  if(show){
+  if($('show').checked){
     const idx=frameAt(video.currentTime*1000);
-    renderFrame(decoded.frames[idx]);
+    paintOsd(ctx, canvas.width, canvas.height, decoded.frames[idx]);
   }
   drawSub();
+  updateStrip(video.currentTime*1000);
+  updatePlayhead();
   if(!video.paused && !video.ended) raf=requestAnimationFrame(draw);
 }
 function drawSub(){
@@ -613,15 +728,14 @@ video.addEventListener('pause',draw);
 video.addEventListener('seeked',draw);
 video.addEventListener('timeupdate',()=>{ if(video.paused) draw(); });
 
-function renderFrame(frame){
+/* paint an OSD frame onto any 2D context sized W×H (used by overlay + export) */
+function paintOsd(c, W, H, frame){
   if(!frame) return;
-  const W=canvas.width, H=canvas.height;
   const cellW=W/GRID_W, cellH=H/GRID_H;
   const scale=(+$('scale').value)/100;
   const ox=(+$('ox').value)/100*cellW;
   const oy=(+$('oy').value)/100*cellH;
-  ctx.globalAlpha=(+$('opacity').value)/100;
-
+  c.globalAlpha=(+$('opacity').value)/100;
   const af=activeFont();
   if(af){
     for(const g of frame.glyphs){
@@ -629,24 +743,40 @@ function renderFrame(frame){
       if(!r) continue;
       const dw=cellW*scale, dh=cellH*scale;
       const dx=g.c*cellW+ox-(dw-cellW)/2, dy=g.r*cellH+oy-(dh-cellH)/2;
-      ctx.drawImage(af.img, r.sx, r.sy, r.sw, r.sh, dx, dy, dw, dh);
+      c.drawImage(af.img, r.sx, r.sy, r.sw, r.sh, dx, dy, dw, dh);
     }
   } else {
-    // built-in: printable ASCII as crisp text, icons hidden
     const fs=cellH*1.02*scale;
-    ctx.font=`600 ${fs}px var(--mono), monospace`;
-    ctx.textBaseline='middle'; ctx.textAlign='center';
-    ctx.lineJoin='round';
+    c.font=`600 ${fs}px ${MONO}`;
+    c.textBaseline='middle'; c.textAlign='center'; c.lineJoin='round';
     for(const g of frame.glyphs){
       if(g.idx<0x20||g.idx>0x7e) continue;
       const ch=String.fromCharCode(g.idx);
       const x=(g.c+0.5)*cellW+ox, y=(g.r+0.5)*cellH+oy;
-      ctx.lineWidth=Math.max(2,fs*0.14); ctx.strokeStyle='rgba(0,0,0,.85)';
-      ctx.strokeText(ch,x,y);
-      ctx.fillStyle='#fff'; ctx.fillText(ch,x,y);
+      c.lineWidth=Math.max(2,fs*0.14); c.strokeStyle='rgba(0,0,0,.85)';
+      c.strokeText(ch,x,y);
+      c.fillStyle='#fff'; c.fillText(ch,x,y);
     }
   }
-  ctx.globalAlpha=1;
+  c.globalAlpha=1;
+}
+const MONO='ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace';
+
+/* paint the subtitle line onto a canvas (used only for export burn-in) */
+function paintSubCanvas(c, W, H, text){
+  if(!text) return;
+  const fs=Math.round(H*0.026);
+  c.font=`500 ${fs}px ${MONO}`;
+  c.textAlign='center'; c.textBaseline='middle';
+  const tw=c.measureText(text).width;
+  const padX=fs*0.7, padY=fs*0.45;
+  const boxW=Math.min(W*0.94, tw+padX*2), boxH=fs+padY*2;
+  const cx=W/2, by=H*0.965 - boxH/2;
+  c.fillStyle='rgba(0,0,0,.55)';
+  if(c.roundRect){ c.beginPath(); c.roundRect(cx-boxW/2, by-boxH/2, boxW, boxH, fs*0.35); c.fill(); }
+  else c.fillRect(cx-boxW/2, by-boxH/2, boxW, boxH);
+  c.fillStyle='#fff';
+  c.fillText(text, cx, by);
 }
 
 /* controls */
@@ -655,21 +785,115 @@ function bindRange(id,suffix){ const el=$(id),v=$(id+'V');
 bindRange('opacity','%'); bindRange('scale','%'); bindRange('ox',''); bindRange('oy','');
 $('show').addEventListener('change',draw);
 
-/* file intake (route by type so .srt can be dropped too) */
-function routeFile(f){
-  if(!f) return;
-  if(/\.srt$/i.test(f.name)) loadSrt(f);
-  else handleVideo(f);
+/* ── telemetry strip (parsed from the .srt, shown below the video) ── */
+function parseTele(text){
+  const get=k=>{ const m=text.match(new RegExp(k+"\\s*:\\s*([0-9.]+)\\s*([A-Za-z%/]*)","i")); return m?{v:m[1],u:m[2]||""}:null; };
+  return {signal:get("Signal"), ch:get("CH"), ft:get("FlightTime"),
+          sbat:get("SBat"), gbat:get("GBat"), bitrate:get("Bitrate"),
+          distance:get("Distance"), mode:get("STYMode")};
 }
+function fmtFT(s){ s=+s||0; return (s/60|0)+":"+String(s%60).padStart(2,'0'); }
+function setT(id,val){ const e=$(id); if(e) e.textContent=val; }
+function updateStrip(ms){
+  const strip=$('strip'); if(!strip) return;
+  if(!srtCues){ strip.classList.remove('on'); return; }
+  strip.classList.add('on');
+  const cue=srtAt(srtCues, ms); if(!cue) return;
+  const t = cue._t || (cue._t = parseTele(cue.text));
+  // signal bars
+  const sig = t.signal? Math.max(0,Math.min(4,Math.round(+t.signal.v))) : 0;
+  const bars=strip.querySelectorAll('#sigbars > i');
+  bars.forEach((b,i)=> b.classList.toggle('on', i<sig));
+  setT('t_signal', t.signal? t.signal.v+"/4" : "—");
+  setT('t_ch',       t.ch?       t.ch.v        : "—");
+  setT('t_ft',       t.ft?       fmtFT(t.ft.v) : "—");
+  setT('t_sbat',     t.sbat?     t.sbat.v+"V"  : "—");
+  setT('t_gbat',     t.gbat?     t.gbat.v+"V"  : "—");
+  setT('t_bitrate',  t.bitrate?  t.bitrate.v+(t.bitrate.u||"") : "—");
+  setT('t_distance', t.distance? t.distance.v+(t.distance.u||"m") : "—");
+  setT('t_mode',     t.mode?     t.mode.v      : "—");
+}
+
+/* ── file intake with SRT auto-pairing ──
+   A clip and its sidecar share a stem (Video003.mp4 / Video003.srt). Browsers
+   can't read a sibling file from a single pick, so pairing happens when both
+   are provided together (multi-select or folder drop); when the video is loaded
+   alone we also try fetching "<stem>.srt" beside the page (deployed case). */
+const isVideo = f => /\.(mp4|mov|m4v)$/i.test(f.name);
+const isSrt   = f => /\.srt$/i.test(f.name);
+const baseStem = n => n.replace(/^.*[\\/]/,"").replace(/\.[^.]+$/,"");
+const stemKey  = n => baseStem(n).toLowerCase().replace(/^\d{6,}[_-]/,"").replace(/[^a-z0-9]+/g,""); // tolerate upload-prefix
+
+async function intake(fileList){
+  const files=[...fileList].filter(f=>f && f.name);
+  if(!files.length) return;
+  const vids=files.filter(isVideo), srts=files.filter(isSrt);
+
+  if(!vids.length){                       // only sidecar(s) handed over
+    if(srts.length) loadSrt(srts[0], true);
+    else handleVideo(files[0]);           // unknown ext: let the decoder try
+    return;
+  }
+  const vid=vids[0];
+  let srt=null;
+  if(srts.length){
+    const vk=stemKey(vid.name);
+    srt = srts.find(s=>stemKey(s.name)===vk) || (srts.length===1 ? srts[0] : null);
+  }
+  await handleVideo(vid);
+  if(srt) await loadSrt(srt, true);
+  else tryAdjacentSrt(vid.name);          // deployed-beside-page fallback
+}
+
+/* read dropped FileSystemEntry trees (folders) into a flat file list */
+function gatherEntries(entries){
+  const out=[];
+  const walk=(entry,depth=0)=>new Promise(res=>{
+    if(!entry){ res(); }
+    else if(entry instanceof File){ out.push(entry); res(); }
+    else if(entry.isFile){ entry.file(f=>{out.push(f);res();}, ()=>res()); }
+    else if(entry.isDirectory && depth<3){
+      const rd=entry.createReader(), acc=[];
+      const step=()=>rd.readEntries(es=>{
+        if(!es.length) Promise.all(acc.map(e=>walk(e,depth+1))).then(res);
+        else { acc.push(...es); step(); }
+      }, ()=>res());
+      step();
+    } else res();
+  });
+  return Promise.all(entries.map(e=>walk(e))).then(()=>out);
+}
+
+/* best-effort: fetch a sidecar sitting next to the page (only works when hosted with the files) */
+async function tryAdjacentSrt(videoName){
+  const url=baseStem(videoName)+".srt";
+  try{
+    const r=await fetch(url,{cache:"no-store"});
+    if(!r.ok) return;
+    const cues=parseSrt(await r.text());
+    if(cues.length) applySrt(cues, url, true);
+  }catch(e){/* absent — fine */}
+}
+
 drop.addEventListener('click',()=>fileIn.click());
 drop.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' ') fileIn.click(); });
-fileIn.addEventListener('change',e=>{ if(e.target.files[0]) routeFile(e.target.files[0]); });
+fileIn.addEventListener('change',e=>{ if(e.target.files.length) intake(e.target.files); });
 ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
-drop.addEventListener('drop',e=>{ for(const f of e.dataTransfer.files) routeFile(f); });
-// also accept files dropped onto the stage once playing
+['dragleave'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+function onDrop(e){
+  e.preventDefault(); drop.classList.remove('hot');
+  const items=e.dataTransfer.items;
+  if(items && items.length && items[0].webkitGetAsEntry){
+    const entries=[];                     // must read entries synchronously in the event
+    for(const it of items){ const en=it.webkitGetAsEntry?it.webkitGetAsEntry():null; if(en) entries.push(en); else { const f=it.getAsFile&&it.getAsFile(); if(f) entries.push(f);} }
+    gatherEntries(entries).then(intake);
+  }else{
+    intake(e.dataTransfer.files);
+  }
+}
+drop.addEventListener('drop',onDrop);
 stage.addEventListener('dragover',e=>e.preventDefault());
-stage.addEventListener('drop',e=>{ e.preventDefault(); for(const f of e.dataTransfer.files) routeFile(f); });
+stage.addEventListener('drop',onDrop);
 
 /* manual font upload — overrides the resolution defaults */
 $('fontBtn').addEventListener('click',()=>$('fontFile').click());
@@ -690,17 +914,21 @@ $('fontFile').addEventListener('change',e=>{
 /* SRT sidecar */
 $('srtBtn').addEventListener('click',()=>$('srtFile').click());
 $('srtFile').addEventListener('change',e=>{ if(e.target.files[0]) loadSrt(e.target.files[0]); });
-async function loadSrt(file){
+async function loadSrt(file, auto){
   try{
-    const text=await file.text();
-    const cues=parseSrt(text);
+    const cues=parseSrt(await file.text());
     if(!cues.length){ showErr("No subtitle cues found in that .srt."); return; }
-    srtCues=cues;
-    const sub=$('subShow'); sub.disabled=false; sub.checked=true;
-    $('srtStatus').textContent=`${file.name} · ${cues.length} cues`;
-    $('srtStatus').style.color="var(--link)";
-    clearErr(); draw();
+    applySrt(cues, file.name, auto);
   }catch(err){ showErr("Couldn't read that .srt: "+err.message); }
+}
+function applySrt(cues, name, auto){
+  srtCues=cues;
+  const sub=$('subShow'); sub.disabled=false; sub.checked=true;
+  const tag=auto?"auto-detected · ":"";
+  $('srtStatus').textContent=`${tag}${name} · ${cues.length} cues`;
+  $('srtStatus').style.color="var(--link)";
+  if(durMs) updateTrimUI();
+  clearErr(); draw();
 }
 $('subShow').addEventListener('change',draw);
 
@@ -721,8 +949,135 @@ $('newBtn').addEventListener('click',()=>{
   fileIn.value=''; $('srtFile').value=''; $('osdBtn').disabled=true;
   const sub=$('subShow'); sub.checked=false; sub.disabled=true;
   $('srtStatus').textContent="none loaded"; $('srtStatus').style.color="var(--faint)";
-  $('subbar').classList.remove('on'); clearErr();
+  $('subbar').classList.remove('on'); $('strip').classList.remove('on');
+  $('exportBtn').disabled=true; $('exportProg').classList.remove('on'); $('exportSub').textContent="";
+  durMs=0; clearErr();
 });
+
+/* ── trim + export ── */
+const trimTrack=$('trimTrack'), trimRange=$('trimRange'),
+      trimInH=$('trimIn'), trimOutH=$('trimOut'), trimPlay=$('trimPlay');
+function fmtT(ms){ const s=Math.max(0,ms)/1000, m=s/60|0; return m+":"+(s%60).toFixed(1).padStart(4,'0'); }
+function initTrim(d){
+  durMs=d||0; trimIn=0; trimOut=durMs; updateTrimUI();
+  $('exNoteSub').textContent = srtCues ? " + subtitles if shown" : "";
+}
+function updateTrimUI(){
+  if(!durMs){ return; }
+  const a=trimIn/durMs*100, b=trimOut/durMs*100;
+  trimRange.style.left=a+"%"; trimRange.style.width=(b-a)+"%";
+  trimInH.style.left=a+"%"; trimOutH.style.left=b+"%";
+  $('tIn').textContent=fmtT(trimIn); $('tOut').textContent=fmtT(trimOut);
+  $('tLen').textContent="length "+fmtT(trimOut-trimIn);
+  $('exNoteSub').textContent = srtCues ? " + subtitles if shown" : "";
+}
+function updatePlayhead(){
+  if(!durMs) return;
+  trimPlay.style.left=(video.currentTime*1000/durMs*100)+"%";
+}
+function pxToMs(clientX){
+  const r=trimTrack.getBoundingClientRect();
+  return Math.max(0,Math.min(durMs,(clientX-r.left)/r.width*durMs));
+}
+function dragHandle(which,e){
+  e.preventDefault();
+  const move=ev=>{
+    const x=(ev.touches?ev.touches[0].clientX:ev.clientX);
+    let ms=pxToMs(x);
+    if(which==='in')  trimIn =Math.min(ms, trimOut-200);
+    else              trimOut=Math.max(ms, trimIn+200);
+    trimIn=Math.max(0,trimIn); trimOut=Math.min(durMs,trimOut);
+    updateTrimUI();
+  };
+  const up=()=>{ window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); };
+  window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
+}
+trimInH.addEventListener('pointerdown',e=>dragHandle('in',e));
+trimOutH.addEventListener('pointerdown',e=>dragHandle('out',e));
+trimTrack.addEventListener('pointerdown',e=>{                 // click track body = seek
+  if(e.target===trimInH||e.target===trimOutH) return;
+  if(durMs) video.currentTime=pxToMs(e.clientX)/1000;
+});
+$('setIn').addEventListener('click',()=>{ trimIn=Math.min(video.currentTime*1000, trimOut-200); updateTrimUI(); });
+$('setOut').addEventListener('click',()=>{ trimOut=Math.max(video.currentTime*1000, trimIn+200); updateTrimUI(); });
+$('trimReset').addEventListener('click',()=>{ trimIn=0; trimOut=durMs; updateTrimUI(); });
+
+function pickMime(){
+  const want=['video/mp4;codecs=avc1.42E01E','video/mp4',
+              'video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+  if(!window.MediaRecorder) return null;
+  return want.find(t=>{ try{ return MediaRecorder.isTypeSupported(t); }catch(e){ return false; } }) || "";
+}
+function setExporting(on){
+  exporting=on;
+  $('exportProg').classList.toggle('on',on);
+  ['exportBtn','setIn','setOut','trimReset','fontBtn','srtBtn','osdBtn','newBtn']
+    .forEach(id=>{ const e=$(id); if(e) e.disabled=on; });
+  if(on){ $('exportBar').style.width="0%"; $('exportPct').textContent="0%"; }
+}
+async function exportVideo(){
+  if(!decoded || exporting) return;
+  const mime=pickMime();
+  if(mime===null){ showErr("This browser can't record video (no MediaRecorder)."); return; }
+  const W=video.videoWidth, H=video.videoHeight;
+  const ec=document.createElement('canvas'); ec.width=W; ec.height=H;
+  const ectx=ec.getContext('2d');
+  const inS=trimIn/1000, outS=Math.max(trimIn+200,trimOut)/1000;
+
+  const stream=ec.captureStream(60);
+  let hasAudio=false;
+  try{ if(video.captureStream){ const vs=video.captureStream();
+        vs.getAudioTracks().forEach(t=>{ stream.addTrack(t); hasAudio=true; }); } }catch(e){}
+  video.muted = !hasAudio;                       // avoid blasting; silent clips just mute
+
+  let rec;
+  try{ rec=new MediaRecorder(stream, Object.assign({videoBitsPerSecond:20000000}, mime?{mimeType:mime}:{})); }
+  catch(e){ showErr("Recorder init failed: "+e.message); return; }
+  const chunks=[]; rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+
+  setExporting(true);
+  $('exportLabel').textContent="Encoding "+fmtT(trimOut-trimIn)+"…";
+
+  let stopped=false;
+  const finish=()=>{ if(stopped) return; stopped=true; try{rec.stop();}catch(e){} video.pause(); };
+  rec.onstop=()=>{
+    const ext = mime && mime.indexOf('mp4')>=0 ? 'mp4' : 'webm';
+    const blob=new Blob(chunks,{type:(mime||'video/webm').split(';')[0]});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download=baseStem(currentName)+"_osd."+ext; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    video.muted=false; setExporting(false);
+    $('exportSub').textContent=`Saved ${a.download} (${(blob.size/1048576).toFixed(1)} MB).`;
+  };
+
+  const paintFrame=()=>{
+    const ms=video.currentTime*1000;
+    ectx.clearRect(0,0,W,H);
+    ectx.drawImage(video,0,0,W,H);
+    if($('show').checked) paintOsd(ectx,W,H,decoded.frames[frameAt(ms)]);
+    if(srtCues && $('subShow').checked){ const c=srtAt(srtCues,ms); if(c) paintSubCanvas(ectx,W,H,c.text); }
+    const frac=Math.min(1,Math.max(0,(video.currentTime-inS)/(outS-inS)));
+    $('exportBar').style.width=(frac*100)+"%"; $('exportPct').textContent=Math.round(frac*100)+"%";
+  };
+  const useRVFC = typeof video.requestVideoFrameCallback==='function';
+  const tick=()=>{
+    if(stopped) return;
+    paintFrame();
+    if(video.currentTime>=outS-0.001 || video.ended){ finish(); return; }
+    useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+  };
+
+  // seek to in-point, then record while playing to out-point
+  video.pause();
+  const seekDone=new Promise(res=>{ const h=()=>{ video.removeEventListener('seeked',h); res(); }; video.addEventListener('seeked',h); });
+  video.currentTime=inS;
+  await seekDone;
+  paintFrame();                                   // prime first frame
+  rec.start(120);
+  try{ await video.play(); }catch(e){ showErr("Couldn't start playback for export: "+e.message); finish(); return; }
+  useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+}
+$('exportBtn').addEventListener('click',exportVideo);
 
 /* bootstrap: auto-load default fonts sitting beside the page (if present) */
 (async function(){
