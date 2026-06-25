@@ -62,6 +62,15 @@
   .filebar .fbicon { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--link); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .filebar .fbname { font-family: var(--mono); font-size: 13px; color: var(--ink); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filebar .fbmeta { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: auto; white-space: nowrap; }
+  .filebar .clipsel { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 280px; cursor: pointer; }
+  .filebar .clipsel:hover { border-color: var(--link); }
+  .filebar .fbload { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; margin-left: 12px; white-space: nowrap; }
+  .filebar .fbload:hover { border-color: var(--link); color: var(--link); }
+  .brwrap { margin-top: 12px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .brhead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+  .brhead .brtitle { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .brhead .brnow { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--link); }
+  .brgraph { display: block; width: 100%; height: 84px; }
 
   /* Immersive Screen Framework */
   .screen { position: relative; border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--line); }
@@ -215,7 +224,9 @@
     <div class="filebar" id="filebar">
       <svg viewBox="0 0 24 24" class="fbicon"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5M16 4v5"/></svg>
       <span class="fbname" id="fbName">—</span>
+      <select id="clipSel" class="clipsel hidden" aria-label="Select clip from folder"></select>
       <span class="fbmeta" id="fbMeta"></span>
+      <button class="fbload" id="loadBtn" type="button" title="Load another video">+ Load video</button>
     </div>
     
     <div class="screen">
@@ -261,6 +272,14 @@
       </div>
     </div>
 
+    <div id="brWrap" class="brwrap hidden">
+      <div class="brhead">
+        <span class="brtitle">Link Bitrate</span>
+        <span id="brNow" class="brnow">—</span>
+      </div>
+      <canvas id="brGraph" class="brgraph"></canvas>
+    </div>
+
     <div class="hud-controls">
       <div class="hud-actions-row">
         <div class="hud-group">
@@ -269,6 +288,11 @@
           
           <label class="switch" style="margin-left: 8px;"><input id="subShow" type="checkbox" disabled><span class="track"></span></label>
           <span style="font-size:13px; font-family:var(--mono)">Subtitles</span>
+
+          <button class="btn" id="brBtn" style="margin-left: 12px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg>
+            Bitrate graph
+          </button>
         </div>
         
         <div class="hud-group">
@@ -721,7 +745,7 @@ const drop = $('drop'), fileIn = $('file'), stage = $('stage'), video = $('video
 const loader = $('loader'), prog = $('prog'), progBar = $('progBar');
 
 const GRID_W = 53, GRID_H = 20;
-let decoded = null, srtCues = null, baseFont = null, customFont = null, raf = null, currentName = "clip";
+let decoded = null, srtCues = null, baseFont = null, customFont = null, raf = null, currentName = "clip", lastBlobUrl = null;
 let durMs = 0, trimIn = 0, trimOut = 0, srcBuf = null;
 
 const EMBEDDED = window.parent !== window || window.location.href.indexOf('sandbox') >= 0;
@@ -757,25 +781,76 @@ drop.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') 
 $('folderBtn').addEventListener('click', () => $('folderFile').click());
 $('folderFile').addEventListener('change', () => { if ($('folderFile').files.length) handleFolder([...$('folderFile').files]); });
 
-async function handleFolder(files) {
+/* ---- Session clip browser: remember a folder, switch clips, auto-pull each SRT ---- */
+let sessionClips = [];   // [{ name, getVideo:()=>Promise<File>, getSrt:()=>Promise<File|null> }]
+
+function clipsFromFiles(files) {
   const isVid = f => f.type.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(f.name);
   const isSrt = f => /\.srt$/i.test(f.name);
-  const vids = files.filter(isVid).sort((a, b) => a.name.localeCompare(b.name));
+  const vids = files.filter(isVid).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   const srts = files.filter(isSrt);
-  if (!vids.length) { showErr("No .mp4 / .mov recordings found in that folder."); return; }
-
-  const v = vids[0];
-  const s = srts.find(x => baseName(x.name) === baseName(v.name)) || (srts.length === 1 ? srts[0] : null);
-  if (vids.length > 1) {
-    $('banner').innerHTML = `<b>Folder scan:</b> ${vids.length} clips found — loaded <b>${v.name}</b> (first by name). Re-scan and the picker remembers the folder.`;
-    $('banner').classList.remove('hidden');
-  }
-  if (s) handleSrt(s, true);
-  else $('srtStatus').textContent = `no .srt matching ${v.name} in folder`;
-  await handleVideo(v);
+  return vids.map(v => {
+    const s = srts.find(x => baseName(x.name) === baseName(v.name)) || null;
+    return { name: v.name, getVideo: async () => v, getSrt: async () => s };
+  });
 }
 
-/* ---- File System Access: remember a folder, then read only the sibling .srt ---- */
+async function clipsFromDir(dir) {
+  const vids = [], srtByStem = {};
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind !== 'file') continue;
+    if (/\.(mp4|mov|m4v)$/i.test(name)) vids.push({ name, h });
+    else if (/\.srt$/i.test(name)) srtByStem[baseName(name)] = h;
+  }
+  vids.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return vids.map(v => ({
+    name: v.name,
+    getVideo: async () => v.h.getFile(),
+    getSrt: async () => { const sh = srtByStem[baseName(v.name)]; return sh ? await sh.getFile() : null; }
+  }));
+}
+
+function setClips(clips, folderLabel) {
+  sessionClips = clips || [];
+  const sel = $('clipSel');
+  sel.innerHTML = '';
+  sessionClips.forEach((c, i) => { const o = document.createElement('option'); o.value = i; o.textContent = c.name; sel.appendChild(o); });
+  if (sessionClips.length > 1) sel.classList.remove('hidden'); else sel.classList.add('hidden');
+  if (folderLabel) $('srtStatus').textContent = `folder: ${folderLabel} · ${sessionClips.length} clip${sessionClips.length === 1 ? '' : 's'}`;
+}
+
+function clearSrtState(msg) {
+  srtCues = null;
+  $('strip').classList.remove('on');
+  $('subbar').classList.remove('on');
+  const sub = $('subShow'); sub.checked = false; sub.disabled = true;
+  $('srtStatus').textContent = msg || "none detected";
+}
+
+async function loadClip(i) {
+  const clip = sessionClips[i]; if (!clip) return;
+  $('clipSel').value = String(i);
+  let srt = null;
+  try { srt = await clip.getSrt(); } catch (e) {}
+  const vid = await clip.getVideo();
+  if (srt) handleSrt(srt, true);
+  else clearSrtState(`no .srt for ${vid.name}`);
+  await handleVideo(vid);
+  if (!srt) { try { await tryLinkedSrt(vid.name, false); } catch (e) {} }
+}
+
+$('clipSel').addEventListener('change', e => loadClip(+e.target.value));
+
+// Folder scan (webkitdirectory) — universal; builds the full clip list for the session.
+async function handleFolder(files) {
+  const clips = clipsFromFiles(files);
+  if (!clips.length) { showErr("No .mp4 / .mov recordings found in that folder."); return; }
+  const label = files[0] && files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : null;
+  setClips(clips, label);
+  await loadClip(0);
+}
+
+/* ---- File System Access: remember a folder handle across sessions ---- */
 const HAS_FSA = (typeof window !== 'undefined') && ('showDirectoryPicker' in window);
 let linkedDir = null;                       // FileSystemDirectoryHandle
 const FS_DB = 'artlynk-fs', FS_STORE = 'handles', FS_KEY = 'dir';
@@ -808,10 +883,10 @@ async function ensureDirPermission(dir, interactive) {
 
 function setLinkLabel() {
   if (!HAS_FSA) return;
-  $('linkBtn').textContent = linkedDir ? `Folder linked: ${linkedDir.name}` : 'Link folder for auto-SRT';
+  $('linkBtn').textContent = linkedDir ? `Folder: ${linkedDir.name}` : 'Link folder for auto-SRT';
 }
 
-// Read ONLY <videostem>.srt from the linked folder — no enumeration of other files.
+// Read ONLY <videostem>.srt from the linked folder — no enumeration.
 async function tryLinkedSrt(videoName, interactive) {
   if (!linkedDir) return false;
   if (!(await ensureDirPermission(linkedDir, interactive))) return false;
@@ -822,8 +897,19 @@ async function tryLinkedSrt(videoName, interactive) {
       const file = await fh.getFile();
       handleSrt(file, true);
       return true;
-    } catch (e) { /* try next candidate */ }
+    } catch (e) { /* try next */ }
   }
+  return false;
+}
+
+// Build/rebuild the clip list from the linked folder for the session browser.
+async function refreshClipsFromLinked(interactive) {
+  if (!linkedDir) return false;
+  if (!(await ensureDirPermission(linkedDir, interactive))) return false;
+  try {
+    const clips = await clipsFromDir(linkedDir);
+    if (clips.length) { setClips(clips, linkedDir.name); return true; }
+  } catch (e) {}
   return false;
 }
 
@@ -833,12 +919,10 @@ if (HAS_FSA) {
     try {
       const dir = await window.showDirectoryPicker({ id: 'artlynk', mode: 'read' });
       linkedDir = dir; await fsStore(dir); setLinkLabel();
-      $('srtStatus').textContent = `auto-SRT folder linked: ${dir.name}`;
-      // If a clip is already loaded without telemetry, fill it in now.
-      if (currentName && (!srtCues || !srtCues.length)) await tryLinkedSrt(currentName, true);
-    } catch (e) { /* user dismissed picker */ }
+      const built = await refreshClipsFromLinked(true);
+      if (built && !stage.classList.contains('on')) await loadClip(0);
+    } catch (e) { /* user dismissed */ }
   });
-  // Restore a previously linked folder (permission is re-confirmed lazily on first use).
   fsLoad().then(h => { if (h) { linkedDir = h; setLinkLabel(); } });
 }
 
@@ -851,6 +935,8 @@ async function handleFiles(files) {
   const srts = files.filter(isSrt);
 
   if (vFile) {
+    // A manually loaded single video isn't part of a folder browse session.
+    $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = [];
     // Auto-find the matching SRT: prefer one whose name matches the video, else the only one present.
     let sFile = srts.find(s => baseName(s.name) === baseName(vFile.name))
              || (srts.length === 1 ? srts[0] : null);
@@ -927,7 +1013,9 @@ async function handleVideo(file) {
     $('sFrames').textContent = decoded.frames.length;
     $('sRes').textContent = `${parsed.width} × ${parsed.height}`;
     
+    if (lastBlobUrl) { try { URL.revokeObjectURL(lastBlobUrl); } catch (e) {} }
     let url = URL.createObjectURL(file);
+    lastBlobUrl = url;
     video.src = url;
     video.load();
     
@@ -1279,6 +1367,7 @@ function parseSrtTime(s) {
 
 function applySrt(cues, name, auto) {
   srtCues = cues;
+  buildBitrateSeries(cues);
   const sub = $('subShow'); sub.disabled = false; sub.checked = true;
   const tag = auto ? "auto-detected · " : "";
   $('srtStatus').textContent = `${tag}${name} · ${cues.length} arrays mapping`;
@@ -1337,25 +1426,48 @@ function frameAt(ms) {
 }
 
 /* Composite Matrix Graph Paint Pipelines */
-function draw() {
-  if (!decoded) return;
-  if (video.paused || video.ended) { paint(); }
-  else { paint(); raf = requestAnimationFrame(draw); }
-}
-video.onplay = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(draw); };
-video.onpause = () => cancelAnimationFrame(raf);
-video.onseeked = () => { paint(); if (decoded) updateStrip(video.currentTime * 1000); };
+let rvfcId = null;
+const HAS_RVFC = (typeof HTMLVideoElement !== 'undefined') && ('requestVideoFrameCallback' in HTMLVideoElement.prototype);
 
-function paint() {
-  const ms = video.currentTime * 1000;
+function cancelLoop() {
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
+  if (rvfcId != null && video.cancelVideoFrameCallback) { try { video.cancelVideoFrameCallback(rvfcId); } catch (e) {} }
+  rvfcId = null;
+}
+
+// Frame loop: prefer requestVideoFrameCallback so the OSD is keyed to the exact
+// media time of the frame actually on screen — stays locked during play and seeks.
+function frameStep(_now, meta) {
+  rvfcId = null; raf = null;
+  paint(meta ? meta.mediaTime * 1000 : undefined);
+  if (!video.paused && !video.ended) scheduleFrame();
+}
+function scheduleFrame() {
+  if (HAS_RVFC) rvfcId = video.requestVideoFrameCallback(frameStep);
+  else raf = requestAnimationFrame(() => frameStep());
+}
+
+function draw() { paint(); }   // single repaint for non-playback callers
+
+video.addEventListener('play',    () => { if (exporting) return; cancelLoop(); scheduleFrame(); });
+video.addEventListener('playing', () => { if (exporting) return; cancelLoop(); scheduleFrame(); });
+video.addEventListener('pause',   () => { if (exporting) return; cancelLoop(); paint(); });
+video.addEventListener('ended',   () => { if (exporting) return; cancelLoop(); paint(); });
+video.addEventListener('seeking', () => { if (exporting) return; paint(); });   // follow the scrub head
+video.addEventListener('seeked',  () => { if (exporting) return; paint(); });   // settle on the landing frame
+video.addEventListener('timeupdate', () => { if (exporting) return; if (video.paused) paint(); });
+
+function paint(msArg) {
+  if (!decoded) return;
+  const ms = (msArg == null) ? video.currentTime * 1000 : msArg;
   // Update positioning track markers
   if (durMs && !exporting) {
     let pct = ms / durMs * 100; trimPlay.style.left = Math.min(100, Math.max(0, pct)) + "%";
   }
-  
+
   let W = video.videoWidth || 1280, H = video.videoHeight || 720;
   if (osd.width !== W || osd.height !== H) { osd.width = W; osd.height = H; }
-  
+
   const ctx = osd.getContext('2d');
   ctx.clearRect(0,0,W,H);
 
@@ -1376,7 +1488,88 @@ function paint() {
   } else {
     $('subbar').classList.remove('on');
   }
+
+  drawBitrateGraph(ms);
 }
+
+/* ---- Bitrate graph (sourced from the SRT, tracks the playhead) ---- */
+let bitrateSeries = [], bitrateMax = 20;
+
+function buildBitrateSeries(cues) {
+  bitrateSeries = [];
+  for (const c of cues) {
+    const m = (c.fields && c.fields.bitrate) ? c.fields.bitrate.match(/([\d.]+)/) : null;
+    if (m) bitrateSeries.push({ t: c.start, v: parseFloat(m[1]) });
+  }
+  bitrateMax = Math.max(10, ...bitrateSeries.map(p => p.v));
+  if ($('brBtn')) $('brBtn').classList.toggle('active', !$('brWrap').classList.contains('hidden'));
+}
+
+function sizeGraph() {
+  const cv = $('brGraph'); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 800, h = cv.clientHeight || 84;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cv._w = w; cv._h = h;
+}
+
+function drawBitrateGraph(ms) {
+  const wrap = $('brWrap');
+  if (!wrap || wrap.classList.contains('hidden')) return;
+  const cv = $('brGraph'); const ctx = cv.getContext('2d');
+  const w = cv._w || cv.clientWidth, h = cv._h || cv.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  if (!bitrateSeries.length || !durMs) {
+    ctx.fillStyle = "rgba(150,160,175,.6)"; ctx.font = "12px monospace"; ctx.textBaseline = "middle";
+    ctx.fillText("no bitrate data in SRT", 10, h / 2); $('brNow').textContent = "—"; return;
+  }
+  const pad = 6, gw = w, gh = h - pad * 2;
+  const X = t => (t / durMs) * gw;
+  const Y = v => pad + gh - (v / bitrateMax) * gh;
+
+  // gridlines
+  ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
+  for (let i = 0; i <= 2; i++) { const y = pad + (gh / 2) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(gw, y); ctx.stroke(); }
+
+  // area + line
+  ctx.beginPath();
+  bitrateSeries.forEach((p, i) => { const x = X(p.t), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  const lastX = X(bitrateSeries[bitrateSeries.length - 1].t);
+  ctx.lineTo(lastX, pad + gh); ctx.lineTo(X(bitrateSeries[0].t), pad + gh); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad, 0, pad + gh);
+  grad.addColorStop(0, "rgba(90,170,255,.28)"); grad.addColorStop(1, "rgba(90,170,255,0)");
+  ctx.fillStyle = grad; ctx.fill();
+
+  ctx.beginPath();
+  bitrateSeries.forEach((p, i) => { const x = X(p.t), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = "#5aaaff"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+
+  // playhead
+  const px = Math.min(gw, Math.max(0, X(ms)));
+  ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+
+  // current value (nearest sample at/just before ms)
+  let cur = bitrateSeries[0];
+  for (const p of bitrateSeries) { if (p.t <= ms) cur = p; else break; }
+  $('brNow').textContent = `${cur.v} Mbps`;
+  ctx.fillStyle = "#5aaaff"; ctx.beginPath(); ctx.arc(px, Y(cur.v), 3, 0, Math.PI * 2); ctx.fill();
+}
+
+$('brBtn').addEventListener('click', () => {
+  const wrap = $('brWrap');
+  const show = wrap.classList.contains('hidden');
+  wrap.classList.toggle('hidden', !show);
+  $('brBtn').classList.toggle('active', show);
+  if (show) { sizeGraph(); drawBitrateGraph(video.currentTime * 1000); }
+});
+window.addEventListener('resize', () => {
+  if (!$('brWrap').classList.contains('hidden')) { sizeGraph(); drawBitrateGraph(video.currentTime * 1000); }
+});
+
+/* ---- Quick "load another video" without resetting the workspace ---- */
+$('loadBtn').addEventListener('click', () => fileIn.click());
 
 function paintOsd(c, W, H, frame) {
   if (!frame) return;
@@ -1511,6 +1704,8 @@ $('newBtn').onclick = () => {
   video.pause(); video.removeAttribute('src'); video.load();
   stage.classList.remove('on'); drop.classList.remove('hidden');
   fileIn.value = ''; $('srtFile').value = ''; $('folderFile').value = ''; $('osdBtn').disabled = true;
+  $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = [];
+  bitrateSeries = []; $('brWrap').classList.add('hidden'); $('brBtn').classList.remove('active');
   $('dlLink').classList.add('hidden');
   const sub = $('subShow'); sub.checked = false; sub.disabled = true;
   $('srtStatus').textContent = "none detected";
