@@ -744,16 +744,25 @@ fileIn.addEventListener('change', () => { if (fileIn.files.length) handleFiles([
 fileIn.addEventListener('click', e => e.stopPropagation());
 drop.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); fileIn.click(); } });
 
+function baseName(name) { return (name || "").replace(/\.[^.]+$/, "").toLowerCase(); }
+
 async function handleFiles(files) {
-  let vFile = files.find(f => f.type.startsWith('video/') || f.name.toLowerCase().endsWith('.mp4') || f.name.toLowerCase().endsWith('.mov'));
-  let sFile = files.find(f => f.name.toLowerCase().endsWith('.srt'));
+  const isVid = f => f.type.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(f.name);
+  const isSrt = f => /\.srt$/i.test(f.name);
+  let vFile = files.find(isVid);
+  const srts = files.filter(isSrt);
+
   if (vFile) {
+    // Auto-find the matching SRT: prefer one whose name matches the video, else the only one present.
+    let sFile = srts.find(s => baseName(s.name) === baseName(vFile.name))
+             || (srts.length === 1 ? srts[0] : null);
     if (sFile) handleSrt(sFile, true);
+    else $('srtStatus').textContent = "no matching .srt — drop it together with the video, or use Import SRT Log";
     await handleVideo(vFile);
-  } else if (sFile) {
-    handleSrt(sFile, false);
+  } else if (srts.length) {
+    handleSrt(srts[0], false);
   } else {
-    showErr("Could not identify usable video items (.mp4 or .mov formats).");
+    showErr("Could not identify a usable recording (.mp4 / .mov). Drop the DVR video — include its .srt alongside for telemetry.");
   }
 }
 
@@ -805,6 +814,9 @@ async function handleVideo(file) {
     decoded = decodeOsd(parsed.seiPackets);
     decoded.width = parsed.width;
     decoded.height = parsed.height;
+    if (!decoded.frames.length) {
+      decoded.firmware = "No embedded OSD found in this MP4";
+    }
     
     // Auto lookup local fallback resources if appropriate
     await tryDefaultFont(parsed.width, parsed.height);
@@ -821,6 +833,9 @@ async function handleVideo(file) {
       hideLoader();
       stage.classList.add('on');
       let d = video.duration;
+      if (video.videoWidth && video.videoHeight) {
+        $('sRes').textContent = `${video.videoWidth} × ${video.videoHeight}`;
+      }
       $('sDur').textContent = d ? `${d.toFixed(1)}s` : "—";
       let hz = d ? decoded.frames.length / d : 0;
       $('sHz').textContent = hz ? `${hz.toFixed(1)} Hz` : "—";
@@ -873,10 +888,11 @@ function parseMp4(ab) {
   const tkhd = child(trak, 'tkhd');
   let width = 1280, height = 720;
   if (tkhd) {
-    let ver = buf[tkhd.start+tkhd.hdr];
-    let off = tkhd.start + tkhd.hdr + (ver === 1 ? 4 + 8 + 8 + 4 + 4 + 8 : 4 + 4 + 4 + 4 + 4 + 4);
-    width = dv.getUint32(off + 16) >> 16;
-    height = dv.getUint32(off + 20) >> 16;
+    const base = tkhd.start + tkhd.hdr;        // points at version/flags
+    const ver = buf[base];
+    const wOff = base + (ver === 1 ? 88 : 76); // skip header + 3x3 matrix (36B) to width
+    const w = dv.getUint32(wOff) >> 16, h = dv.getUint32(wOff + 4) >> 16;
+    if (w > 0 && h > 0) { width = w; height = h; }
   }
 
   const mdia = child(trak, 'mdia');
@@ -951,75 +967,72 @@ function parseMp4(ab) {
 }
 
 function scanAnnexB(buf, start, len, pts, out) {
-  let end = start + len;
-  let i = start;
-  while (i + 4 < end) {
-    let nalLen = (buf[i] << 24) | (buf[i+1] << 16) | (buf[i+2] << 8) | buf[i+3];
-    if (i + 4 + nalLen > end) break;
-    let type = buf[i+4] & 0x1F;
-    if (type === 6) { parseSeiNal(buf, i + 5, nalLen - 1, pts, out); }
+  // Walk length-prefixed (AVCC) NAL units inside a sample, collecting SEI payloads.
+  let end = start + len, i = start;
+  while (i + 4 <= end) {
+    let nalLen = ((buf[i] << 24) | (buf[i+1] << 16) | (buf[i+2] << 8) | buf[i+3]) >>> 0;
+    if (nalLen <= 0 || i + 4 + nalLen > end) break;
+    if ((buf[i+4] & 0x1F) === 6) parseSeiNal(buf, i + 5, i + 4 + nalLen, pts, out);
     i += 4 + nalLen;
   }
 }
 
-function parseSeiNal(buf, start, len, pts, out) {
-  let p = start, end = start + len;
-  while (p < end) {
-    let type = 0; while (p < end && buf[p] === 255) { type += 255; p++; } if (p >= end) break; type += buf[p++];
-    let payloadSz = 0; while (p < end && buf[p] === 255) { payloadSz += 255; p++; } if (p >= end) break; payloadSz += buf[p++];
-    if (p + payloadSz > end) break;
-    if (type === 5) {
-      let em = p, el = p + payloadSz, rbsp = [], zeros = 0;
-      while (em < el) {
-        if (zeros === 2 && buf[em] === 3) { em++; zeros = 0; continue; }
-        if (buf[em] === 0) zeros++; else zeros = 0;
-        rbsp.push(buf[em++]);
-      }
-      if (rbsp.length >= 16) {
-        let isMatch = true, uuid = [0xbd,0xe9,0x45,0xdc,0x9c,0x81,0x4d,0x1b,0xad,0x7d,0x15,0x4c,0x67,0x7b,0x92,0xbc];
-        for (let k = 0; k < 16; k++) if (rbsp[k] !== uuid[k]) isMatch = false;
-        if (isMatch) out.push({ pts, data: new Uint8Array(rbsp.slice(16)) });
-      }
-    }
-    p += payloadSz;
+function parseSeiNal(buf, start, end, pts, out) {
+  // Strip H.264 emulation-prevention (00 00 03) across the whole SEI RBSP first.
+  const rbsp = [];
+  let z = 0;
+  for (let i = start; i < end; i++) {
+    const b = buf[i];
+    if (z >= 2 && b === 3) { z = 0; continue; }
+    rbsp.push(b); z = (b === 0) ? z + 1 : 0;
+  }
+  // Iterate SEI messages: payloadType / payloadSize are ff-extended varints.
+  let p = 0;
+  while (p < rbsp.length) {
+    let type = 0; while (p < rbsp.length && rbsp[p] === 255) { type += 255; p++; } if (p >= rbsp.length) break; type += rbsp[p++];
+    let sz = 0;   while (p < rbsp.length && rbsp[p] === 255) { sz   += 255; p++; } if (p >= rbsp.length) break; sz   += rbsp[p++];
+    if (p + sz > rbsp.length) break;
+    // type 5 = user_data_unregistered: 16-byte UUID followed by the ArtLynk payload.
+    if (type === 5 && sz > 16) out.push({ pts, data: new Uint8Array(rbsp.slice(p + 16, p + sz)) });
+    p += sz;
   }
 }
 
-/* OSD Character Grid Translation Methods */
+/* OSD Character Grid Translation — ArtLynk embedded MSP DisplayPort */
 function decodeOsd(rawPackets) {
   const frames = [];
-  let active = { glyphs: [] };
-  let lastSignal = 0, lastCh = "—", lastMode = "—", lastBat = "—", lastGgb = "—", lastBit = "—", lastDist = "—", lastFt = "—";
-  
-  for (let p of rawPackets) {
-    let d = p.data;
-    if (d.length < 2) continue;
-    let type = (d[0] << 8) | d[1];
-    
-    if (type === 0x3001) {
-      if (active.glyphs.length) frames.push(active);
-      active = {
-        pts: p.pts,
-        glyphs: [],
-        signal: lastSignal, ch: lastCh, mode: lastMode, sbat: lastBat, gbat: lastGgb, bitrate: lastBit, distance: lastDist, ft: lastFt
-      };
-    } else if (type === 0x2001 && d.length >= 6) {
-      let r = d[2], c = d[3], chCode = (d[4] << 8) | d[5];
-      if (r < GRID_H && c < GRID_W) active.glyphs.push({ r, c, idx: chCode });
-    } else if (type === 0x4001) {
-      let str = ""; for (let i = 2; i < d.length; i++) if (d[i]) str += String.fromCharCode(d[i]);
-      if (str.startsWith("g_bat:")) lastGgb = str.split(":")[1];
-      else if (str.startsWith("s_bat:")) lastBat = str.split(":")[1];
-      else if (str.startsWith("ch:")) lastCh = str.split(":")[1];
-      else if (str.startsWith("signal:")) lastSignal = parseInt(str.split(":")[1], 10) || 0;
-      else if (str.startsWith("bitrate:")) lastBit = str.split(":")[1];
-      else if (str.startsWith("distance:")) lastDist = str.split(":")[1];
-      else if (str.startsWith("mode:")) lastMode = str.split(":")[1];
-      else if (str.startsWith("flight_time:")) lastFt = str.split(":")[1];
+  for (const p of rawPackets) {
+    const d = p.data;
+    // ArtLynk SEI packs two payload bytes then one filler byte (0xff); drop every 3rd byte.
+    const data = [];
+    for (let i = 0; i < d.length; i++) if ((i + 1) % 3 !== 0) data.push(d[i]);
+    const n = data.length;
+    if (n < 6) continue;
+
+    // Locate every MSP DisplayPort WRITE_STRING header: b6 03 ROW COL ATTR.
+    const cmd = [];
+    for (let i = 0; i < n - 1; i++) if (data[i] === 0xb6 && data[i + 1] === 0x03) cmd.push(i);
+    if (!cmd.length) continue;
+
+    const glyphs = [];
+    for (let k = 0; k < cmd.length; k++) {
+      const so = cmd[k];
+      if (so + 5 > n) continue;
+      const row = data[so + 2], col = data[so + 3], attr = data[so + 4];
+      const gs = so + 5;
+      // Glyph bytes run up to just before the next command's length byte.
+      const ge = (k + 1 < cmd.length) ? cmd[k + 1] - 1 : n;
+      for (let j = 0; gs + j < ge && gs + j < n; j++) {
+        // Attribute low 2 bits select the high page of the glyph index.
+        const idx = ((attr & 0x03) << 8) | data[gs + j];
+        if (idx === 0x00 || idx === 0x20) continue;
+        const c = col + j;
+        if (row < GRID_H && c < GRID_W) glyphs.push({ r: row, c, idx });
+      }
     }
+    if (glyphs.length) frames.push({ pts: p.pts, glyphs });
   }
-  if (active.glyphs.length) frames.push(active);
-  return { firmware: "Betaflight (ArtLynk MSP)", frames };
+  return { firmware: "Betaflight · ArtLynk MSP DisplayPort", frames };
 }
 
 /* Dynamic Font Texture Scaling System */
@@ -1050,7 +1063,7 @@ async function tryDefaultFont(w, h) {
     $('fontStatus').innerHTML = `Auto-configured grid textures via <b>${target}</b>`;
   } catch(e) {
     baseFont = null;
-    $('fontStatus').innerHTML = `Built-in fallback layout engines prioritized (Text rendering mode)`;
+    $('fontStatus').innerHTML = `Text fallback active — <b>Import a Betaflight OSD font PNG</b> for full glyph/symbol rendering`;
   }
 }
 
@@ -1093,18 +1106,36 @@ function handleSrt(file, auto) {
 }
 
 function parseSrt(txt) {
-  const norms = txt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
+  const norms = txt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split(/\n\s*\n/);
   const cues = [];
   for (let block of norms) {
-    let lines = block.trim().split('\n'); if (lines.length < 3) continue;
-    let timeLine = lines[1]; if (!timeLine.includes('-->')) timeLine = lines[0]; // fallback robustness
-    if (!timeLine.includes('-->')) continue;
-    let parts = timeLine.split('-->');
+    let lines = block.trim().split('\n'); if (lines.length < 2) continue;
+    let ti = lines.findIndex(l => l.includes('-->'));
+    if (ti < 0) continue;
+    let parts = lines[ti].split('-->');
     let start = parseSrtTime(parts[0]), end = parseSrtTime(parts[1]);
-    let text = lines.slice(2).join('\n');
-    cues.push({ start, end, text });
+    let text = lines.slice(ti + 1).join(' ').replace(/\s+/g, ' ').trim();
+    cues.push({ start, end, text, fields: parseTelemetry(text) });
   }
   return cues;
+}
+
+// ArtLynk SRT line, e.g.:
+// "Signal:4 CH: 3 FlightTime: 162 SBat: 3.70 GBat: 6.78 Bitrate:16Mbps Distance:   7m STYMode:0"
+function parseTelemetry(t) {
+  const g = re => { const m = t.match(re); return m ? m[1] : null; };
+  return {
+    signal:   g(/Signal:\s*(\d+)/i),
+    ch:       g(/CH:\s*(\d+)/i),
+    ft:       g(/FlightTime:\s*(\d+)/i),
+    sbat:     g(/SBat:\s*([\d.]+)/i),
+    gbat:     g(/GBat:\s*([\d.]+)/i),
+    bitrate:  g(/Bitrate:\s*([0-9]+\s*[A-Za-z/]*)/i),
+    distance: g(/Distance:\s*(\d+)\s*m/i),
+    sty:      g(/STYMode:\s*(\d+)/i),
+    airtemp:  g(/AirTemp:\s*([\d.]+)/i),
+    gndtemp:  g(/GndTemp:\s*([\d.]+)/i)
+  };
 }
 function parseSrtTime(s) {
   let p = s.trim().split(':'); if (p.length < 3) return 0;
@@ -1126,27 +1157,39 @@ function applySrt(cues, name, auto) {
 }
 $('subShow').onchange = draw;
 
-function srtAt(cues, ms) { return cues.find(c => ms >= c.start && ms <= c.end); }
+function srtAt(cues, ms) {
+  let hit = null;
+  for (const c of cues) {
+    if (ms >= c.start && ms <= c.end) return c;
+    if (c.start <= ms) hit = c;          // remember most recent cue at/just before ms
+  }
+  return hit || (cues.length ? cues[0] : null);
+}
+
+function fmtClock(totalSec) {
+  totalSec = Math.max(0, Math.round(totalSec));
+  const m = Math.floor(totalSec / 60), s = totalSec % 60;
+  return m + ":" + String(s).padStart(2, '0');
+}
 
 function updateStrip(ms) {
-  if (!decoded || !decoded.frames.length) return;
-  let f = decoded.frames[frameAt(ms)]; if (!f) return;
-  
-  $('t_ch').textContent = f.ch;
-  $('t_sbat').textContent = f.sbat;
-  $('t_gbat').textContent = f.gbat;
-  $('t_bitrate').textContent = f.bitrate;
-  $('t_distance').textContent = f.distance;
-  $('t_ft').textContent = f.ft;
-  
-  let sig = f.signal;
-  $('t_signal').textContent = sig ? `${sig}%` : "0%";
-  let bars = $('sigbars').children;
-  for (let i = 0; i < 4; i++) {
-    if (sig > (i * 22)) bars[i].classList.add('on');
-    else bars[i].classList.remove('on');
-  }
-  $('t_mode').textContent = f.mode;
+  if (!srtCues || !srtCues.length) return;
+  const cue = srtAt(srtCues, ms); if (!cue) return;
+  const f = cue.fields;
+
+  $('t_ch').textContent       = f.ch       != null ? f.ch                       : "—";
+  $('t_sbat').textContent     = f.sbat     != null ? f.sbat + "V"               : "—";
+  $('t_gbat').textContent     = f.gbat     != null ? f.gbat + "V"               : "—";
+  $('t_bitrate').textContent  = f.bitrate  != null ? f.bitrate.replace(/\s+/g,'') : "—";
+  $('t_distance').textContent = f.distance != null ? f.distance + "m"           : "—";
+  $('t_ft').textContent       = f.ft       != null ? fmtClock(+f.ft)            : "—";
+
+  const sig = f.signal != null ? parseInt(f.signal, 10) : null;   // ArtLynk signal is 0–4
+  $('t_signal').textContent = sig != null ? `${sig}/4` : "—";
+  const bars = $('sigbars').children;
+  for (let i = 0; i < 4; i++) bars[i].classList.toggle('on', sig != null && sig > i);
+
+  $('t_mode').textContent = f.sty != null ? `STY ${f.sty}` : "—";
 }
 
 function frameAt(ms) {
@@ -1182,16 +1225,21 @@ function paint() {
   
   const ctx = osd.getContext('2d');
   ctx.clearRect(0,0,W,H);
-  
-  if (!$('show').checked) return;
-  let fIdx = frameAt(ms);
-  paintOsd(ctx, W, H, decoded.frames[fIdx]);
-  
-  // Update overlay subtitles if validated
-  if (srtCues && $('subShow').checked) {
-    let cue = srtAt(srtCues, ms);
-    if (cue) { $('subbar').classList.add('on'); $('subtext').textContent = cue.text; }
-    else { $('subbar').classList.remove('on'); }
+
+  if ($('show').checked) {
+    paintOsd(ctx, W, H, decoded.frames[frameAt(ms)]);
+  }
+
+  // Live telemetry strip + subtitles come from the SRT, independent of the OSD toggle.
+  if (srtCues && srtCues.length) {
+    updateStrip(ms);
+    if ($('subShow').checked) {
+      let cue = srtAt(srtCues, ms);
+      if (cue && cue.text) { $('subbar').classList.add('on'); $('subtext').textContent = cue.text; }
+      else { $('subbar').classList.remove('on'); }
+    } else {
+      $('subbar').classList.remove('on');
+    }
   } else {
     $('subbar').classList.remove('on');
   }
@@ -1214,16 +1262,20 @@ function paintOsd(c, W, H, frame) {
       c.drawImage(af.img, r.sx, r.sy, r.sw, r.sh, dx, dy, dw, dh);
     }
   } else {
-    // Elegant fallback type vectoring if raw texture missing
-    const fs = cellH * 1.02 * scale;
-    c.font = `${fs}px ${typeof varSans !== 'undefined' ? 'var(--mono)' : 'monospace'}`;
-    c.fillStyle = "#ffffff"; c.shadowColor = "#000000"; c.shadowBlur = 2;
+    // Text fallback when no font PNG is loaded: render readable ASCII glyphs,
+    // map a few common Betaflight symbols, and skip the rest rather than drawing noise.
+    const fs = cellH * 1.05 * scale;
+    c.font = `${fs}px monospace`;
+    c.textBaseline = "alphabetic";
+    c.fillStyle = "#ffffff"; c.shadowColor = "#000000"; c.shadowBlur = 3;
+    const SYM = { 0x9F: "\u2301", 0x97: "+", 0x90: "\u23F1", 0x70: "\u25B2" }; // batt/alt/timer/throttle-ish
     for (const g of frame.glyphs) {
-      let ch = "?";
-      let base = g.idx & 0xFF;
-      if (base >= 32 && base <= 126) ch = String.fromCharCode(base);
-      else if (base === 0 || base === 32) continue;
-      const dx = g.c * cellW + ox, dy = g.r * cellH + oy + (cellH * 0.8);
+      const base = g.idx & 0xFF;
+      let ch = null;
+      if (base >= 0x20 && base <= 0x7E) ch = String.fromCharCode(base);
+      else if (SYM[g.idx]) ch = SYM[g.idx];
+      if (!ch || ch === " ") continue;
+      const dx = g.c * cellW + ox, dy = g.r * cellH + oy + (cellH * 0.82);
       c.fillText(ch, dx, dy);
     }
   }
