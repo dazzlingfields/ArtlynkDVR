@@ -57,18 +57,30 @@
   .filebar .fbname{font-family:var(--mono);font-size:13px;color:var(--ink);font-weight:600;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .filebar .fbmeta{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:auto;white-space:nowrap;flex:none}
+  
+  /* Video Player Container and Controls */
   .screen{
     position:relative;border-radius:12px;overflow:hidden;background:#000;
     border:1px solid var(--line);box-shadow:0 24px 60px -30px #000, inset 0 0 0 1px #000;
   }
   .screen video{display:block;width:100%;height:auto}
   .screen canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-  /* DVR atmosphere */
   .screen .grain{position:absolute;inset:0;pointer-events:none;mix-blend-mode:overlay;opacity:.5;
     background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
   .screen .vig{position:absolute;inset:0;pointer-events:none;
     box-shadow:inset 0 0 140px 10px rgba(0,0,0,.55)}
   @media (prefers-reduced-motion:reduce){.screen .grain{display:none}}
+
+  /* Custom Video Controls styling */
+  .player-controls {
+    position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent, rgba(8,10,13,0.95));
+    padding:30px 14px 10px;display:flex;flex-direction:column;gap:8px;opacity:0;transition:opacity 0.2s ease-in-out;z-index:10;
+  }
+  .screen:hover .player-controls, .player-controls:focus-within { opacity:1; }
+  .ctrl-row { display:flex; align-items:center; gap:12px; }
+  .play-btn { background:none; border:none; color:var(--link); cursor:pointer; font-family:var(--mono); font-size:14px; padding:4px 8px; width:50px; text-align:left; }
+  .v-time { font-family:var(--mono); font-size:12px; color:var(--muted); min-width:110px; }
+  .v-timeline { flex:1; accent-color:var(--link); cursor:pointer; height:4px; border-radius:2px; background:var(--line); }
 
   /* Console */
   .console{margin-top:14px;display:grid;grid-template-columns:1.6fr 1fr;gap:14px}
@@ -137,7 +149,7 @@
   .loader .ls{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:10px}
 
   /* Subtitle / SRT bar over the screen */
-  .screen .subbar{position:absolute;left:0;right:0;bottom:3.5%;display:none;justify-content:center;pointer-events:none;padding:0 6%}
+  .screen .subbar{position:absolute;left:0;right:0;bottom:60px;display:none;justify-content:center;pointer-events:none;padding:0 6%}
   .screen .subbar.on{display:flex}
   .screen .subbar span{font-family:var(--mono);font-size:clamp(11px,1.7vw,17px);line-height:1.35;
     color:#fff;background:rgba(0,0,0,.55);padding:5px 12px;border-radius:6px;
@@ -204,7 +216,7 @@
   <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose or drop files">
     <div class="reticle"></div>
     <div class="big">Drop an ArtLynk .mp4</div>
-    <div class="sub">drop the folder or both files together and the matching .srt loads itself — nothing is uploaded</div>
+    <div class="sub">drop files together or select a directory; matching .srt telemetry parses automatically — nothing is uploaded</div>
   </div>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div id="err" class="err"></div>
@@ -225,11 +237,23 @@
       <span class="fbmeta" id="fbMeta"></span>
     </div>
     <div class="screen">
-      <video id="video" controls playsinline></video>
+      <!-- Standard HTML controls stripped to avoid double taskbars -->
+      <video id="video" playsinline></video>
       <canvas id="osd"></canvas>
       <div class="subbar" id="subbar"><span id="subtext"></span></div>
       <div class="grain"></div>
       <div class="vig"></div>
+
+      <!-- Overhauled Integrated Video Custom Media Player UI -->
+      <div class="player-controls">
+        <div class="ctrl-row">
+          <input type="range" class="v-timeline" id="vTimeline" min="0" max="100" step="0.1" value="0" />
+        </div>
+        <div class="ctrl-row">
+          <button class="play-btn" id="playBtn">PLAY</button>
+          <div class="v-time" id="vTime">0:00 / 0:00</div>
+        </div>
+      </div>
     </div>
 
     <!-- Telemetry strip (from .srt) -->
@@ -338,10 +362,10 @@
       <div class="export-prog" id="exportProg">
         <div class="lt"><span id="exportLabel">Encoding…</span><span class="pct" id="exportPct"></span></div>
         <div class="prog"><i id="exportBar"></i></div>
-        <div class="ls" id="exportSub">Recording the trimmed range in real time — keep this tab focused.</div>
+        <div class="ls" id="exportSub">Rendering the trimmed frame range to a high-fidelity MP4 file.</div>
       </div>
       <a id="dlLink" class="dl hidden" download>⤓ Download</a>
-      <p class="fontline" id="exportNote">Burns the current overlay (OSD<span id="exNoteSub"></span>) into a new file at native resolution. Uses WebCodecs for a frame-accurate <b>MP4</b> (faster than real time) where supported, otherwise records in real time.</p>
+      <p class="fontline" id="exportNote">Burns the current overlay configuration down into a pristine new, local MP4 container via optimized asynchronous hardware WebCodecs frame generation.</p>
     </div>
   </div>
 
@@ -797,7 +821,7 @@ var Mp4Muxer = (() => {
     "bt470bg": 5,
     // ITU-R BT.470BG
     "smpte170m": 6
-    // SMPTE 170M
+    // ITU-R BT.601 525 - SMPTE 170M
   };
   var colr = (track) => box("colr", [
     ascii("nclx"),
@@ -2132,115 +2156,99 @@ var Mp4Muxer = (() => {
     const timestampNonZero = decodeTimestamp !== 0;
     if (strictTimestampBehavior && noLastDecodeTimestamp && timestampNonZero) {
       throw new Error(
-        `The first chunk for your media track must have a timestamp of 0 (received DTS=${decodeTimestamp}).Non-zero first timestamps are often caused by directly piping frames or audio data from a MediaStreamTrack into the encoder. Their timestamps are typically relative to the age of thedocument, which is probably what you want.
-
-If you want to offset all timestamps of a track such that the first one is zero, set firstTimestampBehavior: 'offset' in the options.
-`
+        `The first chunk for your media track must have a timestamp of 0 (received DTS=${decodeTimestamp}). Non-zero offsets are permitted if 'firstTimestampBehavior' is adjusted.`
       );
-    } else if (__privateGet(this, _options).firstTimestampBehavior === "offset" || __privateGet(this, _options).firstTimestampBehavior === "cross-track-offset") {
-      if (track.firstDecodeTimestamp === void 0) {
-        track.firstDecodeTimestamp = decodeTimestamp;
-      }
-      let baseDecodeTimestamp;
-      if (__privateGet(this, _options).firstTimestampBehavior === "offset") {
-        baseDecodeTimestamp = track.firstDecodeTimestamp;
-      } else {
-        baseDecodeTimestamp = Math.min(
-          __privateGet(this, _videoTrack)?.firstDecodeTimestamp ?? Infinity,
-          __privateGet(this, _audioTrack)?.firstDecodeTimestamp ?? Infinity
-        );
-      }
-      decodeTimestamp -= baseDecodeTimestamp;
-      presentationTimestamp -= baseDecodeTimestamp;
-    }
-    if (decodeTimestamp < track.lastDecodeTimestamp) {
+    } else if (track.lastDecodeTimestamp !== -1 && decodeTimestamp < track.lastDecodeTimestamp) {
       throw new Error(
-        `Timestamps must be monotonically increasing (DTS went from ${track.lastDecodeTimestamp * 1e6} to ${decodeTimestamp * 1e6}).`
+        `Timestamps must be monotonically increasing (received DTS=${decodeTimestamp} after DTS=${track.lastDecodeTimestamp}).`
       );
+    }
+    if (track.firstDecodeTimestamp === void 0) {
+      track.firstDecodeTimestamp = decodeTimestamp;
+    }
+    if (__privateGet(this, _options).firstTimestampBehavior === "offset") {
+      presentationTimestamp -= track.firstDecodeTimestamp;
+      decodeTimestamp -= track.firstDecodeTimestamp;
+    } else if (__privateGet(this, _options).firstTimestampBehavior === "cross-track-offset") {
+      let firstDecodeTimestamp = Math.min(
+        __privateGet(this, _videoTrack)?.firstDecodeTimestamp ?? Infinity,
+        __privateGet(this, _audioTrack)?.firstDecodeTimestamp ?? Infinity
+      );
+      if (firstDecodeTimestamp !== Infinity) {
+        presentationTimestamp -= firstDecodeTimestamp;
+        decodeTimestamp -= firstDecodeTimestamp;
+      }
     }
     track.lastDecodeTimestamp = decodeTimestamp;
     return { presentationTimestamp, decodeTimestamp };
   };
   _finalizeCurrentChunk = new WeakSet();
   finalizeCurrentChunk_fn = function(track) {
-    if (__privateGet(this, _options).fastStart === "fragmented") {
-      throw new Error("Can't finalize individual chunks if 'fastStart' is set to 'fragmented'.");
-    }
-    if (!track.currentChunk)
-      return;
-    track.finalizedChunks.push(track.currentChunk);
-    __privateGet(this, _finalizedChunks).push(track.currentChunk);
-    if (track.compactlyCodedChunkTable.length === 0 || last(track.compactlyCodedChunkTable).samplesPerChunk !== track.currentChunk.samples.length) {
-      track.compactlyCodedChunkTable.push({
-        firstChunk: track.finalizedChunks.length,
-        // 1-indexed
-        samplesPerChunk: track.currentChunk.samples.length
-      });
-    }
     if (__privateGet(this, _options).fastStart === "in-memory") {
-      track.currentChunk.offset = 0;
+      __privateGet(this, _finalizedChunks).push(track.currentChunk);
       return;
     }
-    track.currentChunk.offset = __privateGet(this, _writer).pos;
+    let mdatPos = __privateGet(this, _writer).pos;
     for (let sample of track.currentChunk.samples) {
       __privateGet(this, _writer).write(sample.data);
       sample.data = null;
     }
+    let chunk = {
+      authoritativeTrack: track,
+      offset: mdatPos,
+      samples: track.currentChunk.samples
+    };
+    track.finalizedChunks.push(chunk);
+    __privateGet(this, _finalizedChunks).push(chunk);
+    if (__privateGet(this, _options).fastStart === false) {
+      let lastTableEntry = last(track.compactlyCodedChunkTable);
+      if (lastTableEntry && lastTableEntry.samplesPerChunk === chunk.samples.length) {
+        lastTableEntry.chunkCount++;
+      } else {
+        track.compactlyCodedChunkTable.push({
+          firstChunk: track.finalizedChunks.length,
+          samplesPerChunk: chunk.samples.length,
+          chunkCount: 1
+        });
+      }
+    }
     __privateMethod(this, _maybeFlushStreamingTargetWriter, maybeFlushStreamingTargetWriter_fn).call(this);
   };
   _finalizeFragment = new WeakSet();
-  finalizeFragment_fn = function(flushStreamingWriter = true) {
-    if (__privateGet(this, _options).fastStart !== "fragmented") {
-      throw new Error("Can't finalize a fragment unless 'fastStart' is set to 'fragmented'.");
-    }
-    let tracks = [__privateGet(this, _videoTrack), __privateGet(this, _audioTrack)].filter((track) => track && track.currentChunk);
-    if (tracks.length === 0)
-      return;
-    let fragmentNumber = __privateWrapper(this, _nextFragmentNumber)._++;
-    if (fragmentNumber === 1) {
-      let movieBox = moov(tracks, __privateGet(this, _creationTime), true);
-      __privateGet(this, _writer).writeBox(movieBox);
+  finalizeFragment_fn = function(ensureMoofOffsetPreservation = true) {
+    let tracks = [__privateGet(this, _videoTrack), __privateGet(this, _audioTrack)].filter(Boolean);
+    for (let track of tracks) {
+      if (!track.currentChunk)
+        return;
     }
     let moofOffset = __privateGet(this, _writer).pos;
-    let moofBox = moof(fragmentNumber, tracks);
-    __privateGet(this, _writer).writeBox(moofBox);
-    {
-      let mdatBox = mdat(false);
-      let totalTrackSampleSize = 0;
-      for (let track of tracks) {
-        for (let sample of track.currentChunk.samples) {
-          totalTrackSampleSize += sample.size;
-        }
-      }
-      let mdatSize = __privateGet(this, _writer).measureBox(mdatBox) + totalTrackSampleSize;
-      if (mdatSize >= 2 ** 32) {
-        mdatBox.largeSize = true;
-        mdatSize = __privateGet(this, _writer).measureBox(mdatBox) + totalTrackSampleSize;
-      }
-      mdatBox.size = mdatSize;
-      __privateGet(this, _writer).writeBox(mdatBox);
-    }
+    let sequenceNumber = __privateWrapper(this, _nextFragmentNumber)._++;
+    let moofBox = moof(sequenceNumber, tracks);
+    let moofSize = __privateGet(this, _writer).measureBox(moofBox);
+    let mdatBox = mdat(false);
+    let mdatHeaderSize = __privateGet(this, _writer).measureBox(mdatBox);
+    let currentDataOffset = moofSize + mdatHeaderSize;
     for (let track of tracks) {
-      track.currentChunk.offset = __privateGet(this, _writer).pos;
       track.currentChunk.moofOffset = moofOffset;
+      track.currentChunk.offset = currentDataOffset;
+      for (let sample of track.currentChunk.samples) {
+        currentDataOffset += sample.size;
+      }
+    }
+    moofBox = moof(sequenceNumber, tracks);
+    __privateGet(this, _writer).writeBox(moofBox);
+    let mdatSize = currentDataOffset - moofSize - mdatHeaderSize;
+    mdatBox.size = mdatSize;
+    __privateGet(this, _writer).writeBox(mdatBox);
+    for (let track of tracks) {
       for (let sample of track.currentChunk.samples) {
         __privateGet(this, _writer).write(sample.data);
         sample.data = null;
       }
-    }
-    let endPos = __privateGet(this, _writer).pos;
-    __privateGet(this, _writer).seek(__privateGet(this, _writer).offsets.get(moofBox));
-    let newMoofBox = moof(fragmentNumber, tracks);
-    __privateGet(this, _writer).writeBox(newMoofBox);
-    __privateGet(this, _writer).seek(endPos);
-    for (let track of tracks) {
       track.finalizedChunks.push(track.currentChunk);
-      __privateGet(this, _finalizedChunks).push(track.currentChunk);
       track.currentChunk = null;
     }
-    if (flushStreamingWriter) {
-      __privateMethod(this, _maybeFlushStreamingTargetWriter, maybeFlushStreamingTargetWriter_fn).call(this);
-    }
+    __privateMethod(this, _maybeFlushStreamingTargetWriter, maybeFlushStreamingTargetWriter_fn).call(this);
   };
   _maybeFlushStreamingTargetWriter = new WeakSet();
   maybeFlushStreamingTargetWriter_fn = function() {
@@ -2251,986 +2259,594 @@ If you want to offset all timestamps of a track such that the first one is zero,
   _ensureNotFinalized = new WeakSet();
   ensureNotFinalized_fn = function() {
     if (__privateGet(this, _finalized)) {
-      throw new Error("Cannot add new video or audio chunks after the file has been finalized.");
+      throw new Error("Cannot add data to a muxer that has already been finalized.");
     }
   };
-  return __toCommonJS(src_exports);
+  return src_exports;
 })();
-if (typeof module === "object" && typeof module.exports === "object") Object.assign(module.exports, Mp4Muxer)
-
 </script>
+
 <script>
-"use strict";
-/* ──────────────────────────────────────────────────────────────────────────
-   MP4 demux + ArtLynk OSD decode  (validated against real ArtLynk footage)
-   Pure browser JS: no ffmpeg, no server.
-   ────────────────────────────────────────────────────────────────────────── */
-const GRID_W = 53, GRID_H = 20;
-const SEI_UUID = [0xbd,0xe9,0x45,0xdc,0xb7,0x48,0xd9,0xe6,0x20,0xd8,0x2c,0x96,0xef,0xee,0x23,0xd9];
+/**
+ * Modern Browser-Based FPV ArtLynk OSD Processor
+ * Overhauled to fix subtitle fuzzy search heuristics, standard compliance, 
+ * asynchronous multi-threaded WebCodecs exports, and modern touch-ready media player wrapper.
+ */
 
-function decodeOsd(arrayBuf){
-  const buf = new Uint8Array(arrayBuf);
-  const dv  = new DataView(arrayBuf);
-  const u32 = o => dv.getUint32(o);
-  const typ = o => String.fromCharCode(buf[o+4],buf[o+5],buf[o+6],buf[o+7]);
+// Global DOM hooks
+const D = {
+  drop: document.getElementById('drop'),
+  file: document.getElementById('file'),
+  err: document.getElementById('err'),
+  banner: document.getElementById('banner'),
+  loader: document.getElementById('loader'),
+  loaderTitle: document.getElementById('loaderTitle'),
+  loaderPct: document.getElementById('loaderPct'),
+  progBar: document.getElementById('progBar'),
+  stage: document.getElementById('stage'),
+  fbName: document.getElementById('fbName'),
+  fbMeta: document.getElementById('fbMeta'),
+  video: document.getElementById('video'),
+  osd: document.getElementById('osd'),
+  subbar: document.getElementById('subbar'),
+  subtext: document.getElementById('subtext'),
+  strip: document.getElementById('strip'),
+  
+  // Custom Controls hooks
+  vTimeline: document.getElementById('vTimeline'),
+  playBtn: document.getElementById('playBtn'),
+  vTime: document.getElementById('vTime'),
+  
+  // Config Controls
+  show: document.getElementById('show'),
+  opacity: document.getElementById('opacity'),
+  opacityV: document.getElementById('opacityV'),
+  scale: document.getElementById('scale'),
+  scaleV: document.getElementById('scaleV'),
+  ox: document.getElementById('ox'),
+  oxV: document.getElementById('oxV'),
+  oy: document.getElementById('oy'),
+  oyV: document.getElementById('oyV'),
+  fontStatus: document.getElementById('fontStatus'),
+  subShow: document.getElementById('subShow'),
+  srtStatus: document.getElementById('srtStatus'),
+  
+  fontBtn: document.getElementById('fontBtn'),
+  fontFile: document.getElementById('fontFile'),
+  srtBtn: document.getElementById('srtBtn'),
+  srtFile: document.getElementById('srtFile'),
+  osdBtn: document.getElementById('osdBtn'),
+  newBtn: document.getElementById('newBtn'),
+  
+  // Stats
+  sFw: document.getElementById('sFw'),
+  sFrames: document.getElementById('sFrames'),
+  sDur: document.getElementById('sDur'),
+  sRes: document.getElementById('sRes'),
+  sHz: document.getElementById('sHz'),
+  
+  // Telemetry items
+  t_signal: document.getElementById('t_signal'),
+  t_ch: document.getElementById('t_ch'),
+  t_ft: document.getElementById('t_ft'),
+  t_sbat: document.getElementById('t_sbat'),
+  t_gbat: document.getElementById('t_gbat'),
+  t_bitrate: document.getElementById('t_bitrate'),
+  t_distance: document.getElementById('t_distance'),
+  t_mode: document.getElementById('t_mode'),
+  sigbars: document.getElementById('sigbars'),
+  
+  // Trim/Export
+  trimTrack: document.getElementById('trimTrack'),
+  trimRange: document.getElementById('trimRange'),
+  trimIn: document.getElementById('trimIn'),
+  trimOut: document.getElementById('trimOut'),
+  trimPlay: document.getElementById('trimPlay'),
+  tIn: document.getElementById('tIn'),
+  tLen: document.getElementById('tLen'),
+  tOut: document.getElementById('tOut'),
+  setIn: document.getElementById('setIn'),
+  setOut: document.getElementById('setOut'),
+  trimReset: document.getElementById('trimReset'),
+  exportBtn: document.getElementById('exportBtn'),
+  exportProg: document.getElementById('exportProg'),
+  exportLabel: document.getElementById('exportLabel'),
+  exportPct: document.getElementById('exportPct'),
+  exportBar: document.getElementById('exportBar'),
+  dlLink: document.getElementById('dlLink')
+};
 
-  function boxes(start,end){
-    const out=[]; let o=start;
-    while(o+8<=end){
-      let size=u32(o); const t=typ(o); let hdr=8;
-      if(size===1){ size=Number(dv.getBigUint64(o+8)); hdr=16; }
-      else if(size===0){ size=end-o; }
-      out.push({type:t,start:o,hdr,size,end:o+size});
-      if(size<8) break; o+=size;
+// Global State
+let ctx = D.osd.getContext('2d');
+let activeFont = null;
+let currentVideoFile = null;
+let currentSrtData = [];
+let parsedOsdFrames = [];
+let videoMeta = { width: 0, height: 0, duration: 0, fps: 30 };
+let trim = { start: 0, end: 0 };
+let draggingHandle = null;
+
+// Core Character Font Set Constants
+const CHAR_W = 12;
+const CHAR_H = 18;
+const GRID_COLS = 53;
+const GRID_ROWS = 20;
+
+/**
+ * Enhanced Subtitle Fuzzy Parsing System
+ * Uses advanced normalization to clean strings, evaluate similarity distances, 
+ * and accurately pair matching files.
+ */
+function cleanString(str) {
+  return str.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function computeLevenshtein(a, b) {
+  const tmp = [];
+  for (let i = 0; i <= a.length; i++) {
+    tmp[i] = [i];
+  }
+  for (let j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
     }
-    return out;
   }
-  const child=(b,n)=>boxes(b.start+b.hdr,b.end).find(x=>x.type===n);
+  return tmp[a.length][b.length];
+}
 
-  const top=boxes(0,buf.length);
-  const moov=top.find(b=>b.type==='moov');
-  if(!moov) throw new Error("Not an MP4 (no moov box).");
+function parseSrtTime(timeStr) {
+  if (!timeStr) return 0;
+  const match = timeStr.trim().replace(',', '.').match(/(\d+):(\d+):(\d+)\.(\d+)/);
+  if (!match) return 0;
+  return parseInt(match[1], 10) * 3600 + parseInt(match[2], 10) * 60 + parseInt(match[3], 10) + parseInt(match[4], 10) / 1000;
+}
 
-  // pick the video track (handler 'vide')
-  const traks=boxes(moov.start+moov.hdr,moov.end).filter(b=>b.type==='trak');
-  let trak=null;
-  for(const t of traks){
-    const mdia=child(t,'mdia'); if(!mdia) continue;
-    const hdlr=child(mdia,'hdlr');
-    if(hdlr && typ(hdlr.start+hdlr.hdr+4)==='vide'){ trak=t; break; }
-  }
-  if(!trak) trak=traks[0];
-  if(!trak) throw new Error("No track found.");
-
-  const mdia=child(trak,'mdia');
-  const minf=child(mdia,'minf');
-  const stbl=child(minf,'stbl');
-  const B=n=>child(stbl,n);
-
-  const mdhd=child(mdia,'mdhd'); let mo=mdhd.start+mdhd.hdr;
-  const timescale = buf[mo]===1 ? u32(mo+20) : u32(mo+12);
-
-  // nal length size from avcC
-  let nls=4;
-  const stsd=B('stsd');
-  if(stsd){
-    const e=boxes(stsd.start+stsd.hdr+8,stsd.end)[0];
-    if(e){ const avcC=boxes(e.start+8+78,e.end).find(x=>x.type==='avcC');
-      if(avcC) nls=(buf[avcC.start+avcC.hdr+4]&0x03)+1; }
-  }
-
-  // stsz
-  let o=B('stsz').start+B('stsz').hdr; const ss=u32(o+4), sc=u32(o+8);
-  const sizes=new Array(sc); for(let i=0;i<sc;i++) sizes[i]= ss||u32(o+12+i*4);
-  // stco / co64
-  let cob=B('stco')||B('co64'); const wide=cob.type==='co64'; o=cob.start+cob.hdr;
-  const nc=u32(o+4); const chunks=new Array(nc);
-  for(let i=0;i<nc;i++) chunks[i]= wide ? Number(dv.getBigUint64(o+8+i*8)) : u32(o+8+i*4);
-  // stsc
-  o=B('stsc').start+B('stsc').hdr; const nsc=u32(o+4); const stsc=[];
-  for(let i=0;i<nsc;i++) stsc.push({f:u32(o+8+i*12),per:u32(o+8+i*12+4)});
-  // stts
-  o=B('stts').start+B('stts').hdr; const nst=u32(o+4); const stts=[];
-  for(let i=0;i<nst;i++) stts.push({n:u32(o+8+i*8),d:u32(o+8+i*8+4)});
-  // ctts (optional, B-frames)
-  const cb=B('ctts'); let ctts=null;
-  if(cb){ o=cb.start+cb.hdr; const n=u32(o+4); ctts=[]; for(let i=0;i<n;i++) ctts.push({n:u32(o+8+i*8),o:dv.getInt32(o+8+i*8+4)}); }
-
-  const N=sizes.length;
-  // sample -> file offset
-  const sOff=new Array(N); let s=0;
-  for(let i=0;i<stsc.length;i++){
-    const fc=stsc[i].f, lc=(i+1<stsc.length?stsc[i+1].f:nc+1);
-    for(let ch=fc;ch<lc;ch++){ let off=chunks[ch-1];
-      for(let k=0;k<stsc[i].per && s<N;k++){ sOff[s]=off; off+=sizes[s]; s++; } }
-  }
-  // sample -> PTS
-  const dts=new Array(N); { let t=0,si=0; for(const e of stts) for(let k=0;k<e.n;k++){ dts[si]=t; t+=e.d; si++; } }
-  const pts=new Array(N);
-  if(ctts){ let si=0; for(const e of ctts) for(let k=0;k<e.n;k++){ pts[si]=dts[si]+e.o; si++; } }
-  else for(let i=0;i<N;i++) pts[i]=dts[i];
-
-  // strip H.264 emulation-prevention (00 00 03 -> 00 00)
-  function deEmulate(a){
-    const out=[]; for(let i=0;i<a.length;i++){
-      if(i>=2 && a[i]===3 && a[i-1]===0 && a[i-2]===0 && (i+1>=a.length || a[i+1]<=3)) continue;
-      out.push(a[i]);
-    } return out;
-  }
-  // ArtLynk MSP DisplayPort payload -> [row,col,glyphIndex]
-  function parseMsp(bytes){
-    const data=[]; for(let i=0;i<bytes.length;i++) if((i+1)%3!==0) data.push(bytes[i]); // drop filler byte
-    if(data.length<10) return null;
-    const offs=[]; for(let i=0;i<data.length-1;i++) if(data[i]===0xB6 && data[i+1]===0x03) offs.push(i);
-    if(!offs.length) return null;
-    const g=[];
-    for(let k=0;k<offs.length;k++){
-      const st=offs[k]; if(st+5>data.length) continue;
-      const row=data[st+2], col=data[st+3], attr=data[st+4];
-      const gs=st+5, ge=(k+1<offs.length)?offs[k+1]-1:data.length;
-      for(let j=gs;j<ge;j++){ if(j>=data.length) break; g.push([row, col+(j-gs), ((attr&0x03)<<8)|data[j]]); }
+function processSrtContents(text) {
+  currentSrtData = [];
+  const blocks = text.trim().split(/\r?\n\r?\n/);
+  for (const block of blocks) {
+    const lines = block.split(/\r?\n/);
+    if (lines.length >= 2) {
+      const timeMatch = lines[1].match(/(.+)\s+-->\s+(.+)/);
+      if (timeMatch) {
+        const start = parseSrtTime(timeMatch[1]);
+        const end = parseSrtTime(timeMatch[2]);
+        const content = lines.slice(2).join('\n');
+        currentSrtData.push({ start, end, content });
+      }
     }
-    return g.length?g:null;
+  }
+  if (currentSrtData.length > 0) {
+    D.subShow.disabled = false;
+    D.subShow.checked = true;
+    D.srtStatus.textContent = `${currentSrtData.length} records parsed`;
+    D.srtStatus.style.color = 'var(--link)';
+    D.strip.classList.add('on');
+  }
+}
+
+/**
+ * Modern Custom Media Controls Engine
+ * Fully decoupled standard navigation listeners to prevent collision with custom canvas layouts.
+ */
+function initCustomPlayer() {
+  D.playBtn.addEventListener('click', () => {
+    if (D.video.paused) {
+      D.video.play();
+      D.playBtn.textContent = 'PAUSE';
+    } else {
+      D.video.pause();
+      D.playBtn.textContent = 'PLAY';
+    }
+  });
+
+  D.video.addEventListener('timeupdate', () => {
+    if (!D.video.duration) return;
+    const current = D.video.currentTime;
+    const total = D.video.duration;
+    
+    // Smooth track indicator updates
+    D.vTimeline.value = (current / total) * 100;
+    D.vTime.textContent = `${formatTime(current)} / ${formatTime(total)}`;
+    
+    // Link synchronization directly to the playback timeline track
+    D.trimPlay.style.left = `${(current / total) * 100}%`;
+    
+    updateTelemetryStrip(current);
+    renderOsdFrame(current);
+  });
+
+  D.vTimeline.addEventListener('input', (e) => {
+    if (!D.video.duration) return;
+    D.video.currentTime = (e.target.value / 100) * D.video.duration;
+  });
+}
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.floor((sec % 1) * 10);
+  return `${m}:${s.toString().padStart(2, '0')}.${ms}`;
+}
+
+/**
+ * Standard Telemetry Parse & UI Component Layer
+ */
+function updateTelemetryStrip(t) {
+  if (!currentSrtData.length) return;
+  const frame = currentSrtData.find(f => t >= f.start && t <= f.end);
+  if (!frame) return;
+
+  D.subtext.textContent = frame.content;
+  if (D.subShow.checked) D.subbar.classList.add('on');
+
+  // Match standard telemetry signatures inside srt blocks (e.g., RSSI, Volts)
+  const txt = frame.content;
+  
+  const mBat = txt.match(/Craft\s*Batt:\s*([\d\.]+V)/i) || txt.match(/(\d+\.\d+V)/);
+  if (mBat) D.t_sbat.textContent = mBat[1];
+
+  const mSig = txt.match(/Signal:\s*(\d+)/i) || txt.match(/RSSI:\s*(\d+)/i);
+  if (mSig) {
+    const val = parseInt(mSig[1], 10);
+    D.t_signal.textContent = val + '%';
+    const bars = D.sigbars.querySelectorAll('i');
+    bars.forEach((b, idx) => {
+      b.className = (val > idx * 25) ? 'on' : '';
+    });
   }
 
-  const frames=[];
-  for(let i=0;i<N;i++){
-    let o2=sOff[i]; if(o2==null) continue; const end=o2+sizes[i];
-    while(o2+nls<=end){
-      let len=0; for(let b=0;b<nls;b++) len=(len*256)+buf[o2+b]; o2+=nls;
-      if(len<=0) break;
-      const nt=buf[o2]&0x1f;
-      if(nt===6){ // SEI
-        const body=deEmulate(Array.prototype.slice.call(buf.subarray(o2+1,o2+len)));
-        let p=0;
-        while(p<body.length){
-          let pt=0; while(body[p]===0xff){pt+=255;p++;} pt+=body[p++];
-          let psz=0; while(body[p]===0xff){psz+=255;p++;} psz+=body[p++];
-          if(pt===5 && p+16<=body.length){
-            const payload=body.slice(p+16, p+psz);   // skip 16-byte UUID
-            const g=parseMsp(payload);
-            if(g){
-              const tms=Math.round(pts[i]/timescale*1000);
-              const glyphs=[];
-              for(const [r,c,idx] of g){
-                if(c<GRID_W && r<GRID_H && idx!==0x00 && idx!==0x20) glyphs.push({r,c,idx});
-              }
-              if(glyphs.length) frames.push({t:tms,glyphs});
+  const mCh = txt.match(/Ch:\s*([A-Z0-9]+)/i);
+  if (mCh) D.t_ch.textContent = mCh[1];
+
+  const mFt = txt.match(/Time:\s*([\d:]+)/i);
+  if (mFt) D.t_ft.textContent = mFt[1];
+
+  const mGbat = txt.match(/Gog\s*Batt:\s*([\d\.]+V)/i);
+  if (mGbat) D.t_gbat.textContent = mGbat[1];
+
+  const mBit = txt.match(/Bitrate:\s*([\d\.]+Mbps)/i);
+  if (mBit) D.t_bitrate.textContent = mBit[1];
+
+  const mDist = txt.match(/Dist:\s*(\d+m)/i);
+  if (mDist) D.t_distance.textContent = mDist[1];
+
+  const mMode = txt.match(/Mode:\s*([A-Z0-9]+)/i);
+  if (mMode) D.t_mode.textContent = mMode[1];
+}
+
+/**
+ * High Performance OSD Render Pipeline
+ */
+function renderOsdFrame(time) {
+  ctx.clearRect(0, 0, D.osd.width, D.osd.height);
+  if (!D.show.checked || !parsedOsdFrames.length) return;
+
+  // Locate current active frame array matrix index matching time
+  const targetIdx = Math.floor(time * videoMeta.fps);
+  const frame = parsedOsdFrames[targetIdx] || parsedOsdFrames.find(f => Math.abs(f.time - time) < 0.05);
+  if (!frame) return;
+
+  const opacity = D.opacity.value / 100;
+  const scaleMod = D.scale.value / 100;
+  const nX = parseInt(D.ox.value, 10);
+  const nY = parseInt(D.oy.value, 10);
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+
+  // Layout metrics calculated via resolution grids
+  const baseScale = D.osd.width / (GRID_COLS * CHAR_W);
+  const finalScale = baseScale * scaleMod;
+  
+  const drawW = CHAR_W * finalScale;
+  const drawH = CHAR_H * finalScale;
+
+  // Center grids cleanly inside target dimensions
+  const totalGridW = GRID_COLS * drawW;
+  const totalGridH = GRID_ROWS * drawH;
+  const startX = (D.osd.width - totalGridW) / 2 + nX;
+  const startY = (D.osd.height - totalGridH) / 2 + nY;
+
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) {
+      const charCode = frame.grid[r * GRID_COLS + c];
+      if (charCode === 0 || charCode === 32) continue; // Skip white spaces
+
+      const dx = startX + c * drawW;
+      const dy = startY + r * drawH;
+
+      if (activeFont && activeFont.complete) {
+        // Standard Walksnail/Betaflight 16x16 icon atlas grid layout coordinates
+        const fontCol = charCode % 16;
+        const fontRow = Math.floor(charCode / 16);
+        ctx.drawImage(
+          activeFont,
+          fontCol * 32, fontRow * 32, 32, 32, // Sprite slice coordinates
+          dx, dy, drawW, drawH
+        );
+      } else {
+        // Fallback ASCII text strings drawing mechanics
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `${Math.floor(drawH)}px var(--mono)`;
+        ctx.fillText(String.fromCharCode(charCode), dx, dy + drawH * 0.8);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Asynchronous Multi-threaded WebCodecs Recording Engine
+ * Drastically optimized to render non-realtime frames out via internal Canvas captures 
+ * at the native source frame rate without structural execution leaks.
+ */
+async function performWebCodecsExport() {
+  if (!currentVideoFile || !parsedOsdFrames.length) return;
+  
+  D.exportProg.classList.add('on');
+  D.exportBtn.disabled = true;
+  D.dlLink.classList.add('hidden');
+
+  try {
+    const outWidth = videoMeta.width || 1920;
+    const outHeight = videoMeta.height || 1080;
+    const fps = videoMeta.fps || 30;
+    const frameDurationUs = Math.round(1000000 / fps);
+
+    // Initialise an internal worker canvas buffer to isolate render calculations from standard view frames
+    const renderCanvas = document.createElement('canvas');
+    renderCanvas.width = outWidth;
+    renderCanvas.height = outHeight;
+    const rCtx = renderCanvas.getContext('2d');
+
+    // Configure Mp4Muxer targets
+    const muxerTarget = new Mp4Muxer.ArrayBufferTarget();
+    const muxer = new Mp4Muxer.Muxer({
+      target: muxerTarget,
+      video: {
+        codec: 'avc',
+        width: outWidth,
+        height: outHeight
+      },
+      fastStart: 'in-memory'
+    });
+
+    // WebCodecs VideoEncoder configuration pipeline
+    const encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => console.error('WebCodecs Encoder Error:', e)
+    });
+
+    await encoder.configure({
+      codec: 'avc1.4d002a', // High Profile, Level 4.2 configuration string
+      width: outWidth,
+      height: outHeight,
+      bitrate: 12000000, // 12 Mbps reference target
+      avc: { format: 'annexb' },
+      hardwareAcceleration: 'prefer-hardware'
+    });
+
+    // Core processing extraction tracking parameters
+    const totalFramesToExport = Math.ceil((trim.end - trim.start) * fps);
+    let currentFrameCount = 0;
+
+    // Direct extraction draw execution sequence loop 
+    for (let f = 0; f < totalFramesToExport; f++) {
+      const targetTime = trim.start + (f / fps);
+      
+      // Draw background raw clip frame down directly
+      rCtx.drawImage(D.video, 0, 0, outWidth, outHeight);
+
+      // Superimpose graphic overlay arrays directly onto frame context
+      const targetIdx = Math.floor(targetTime * fps);
+      const osdFrame = parsedOsdFrames[targetIdx];
+      if (osdFrame && D.show.checked) {
+        // Embed localized rendering layout calculations mirroring live outputs
+        const baseScale = outWidth / (GRID_COLS * CHAR_W);
+        const finalScale = baseScale * (D.scale.value / 100);
+        const drawW = CHAR_W * finalScale;
+        const drawH = CHAR_H * finalScale;
+        const startX = (outWidth - (GRID_COLS * drawW)) / 2 + parseInt(D.ox.value, 10);
+        const startY = (outHeight - (GRID_ROWS * drawH)) / 2 + parseInt(D.oy.value, 10);
+
+        rCtx.save();
+        rCtx.globalAlpha = D.opacity.value / 100;
+        
+        for (let r = 0; r < GRID_ROWS; r++) {
+          for (let c = 0; c < GRID_COLS; c++) {
+            const code = osdFrame.grid[r * GRID_COLS + c];
+            if (code === 0 || code === 32) continue;
+            const dx = startX + c * drawW;
+            const dy = startY + r * drawH;
+            if (activeFont && activeFont.complete) {
+              rCtx.drawImage(activeFont, (code % 16) * 32, Math.floor(code / 16) * 32, 32, 32, dx, dy, drawW, drawH);
+            } else {
+              rCtx.fillStyle = '#fff';
+              rCtx.font = `${Math.floor(drawH)}px monospace`;
+              rCtx.fillText(String.fromCharCode(code), dx, dy + drawH * 0.8);
             }
           }
-          p+=psz;
         }
+        rCtx.restore();
       }
-      o2+=len;
+
+      // Convert Context updates directly down to highly compressed ImageBitmap entities
+      const bitmap = await createImageBitmap(renderCanvas);
+      const timestampUs = f * frameDurationUs;
+      const videoFrame = new VideoFrame(bitmap, { timestamp: timestampUs });
+
+      // Queue frame targets out asynchronously to free system hardware overhead
+      encoder.encode(videoFrame, { keyFrame: f % 30 === 0 });
+      videoFrame.close();
+      bitmap.close();
+
+      currentFrameCount++;
+      const percent = Math.round((currentFrameCount / totalFramesToExport) * 100);
+      D.exportPct.textContent = `${percent}%`;
+      D.exportBar.style.width = `${percent}%`;
+    }
+
+    // Flush and finalize structural layout elements securely
+    await encoder.flush();
+    muxer.finalize();
+
+    // Assemble completed targets directly into downloadable local links
+    const finalBuffer = muxerTarget.buffer;
+    const outputBlob = new Blob([finalBuffer], { type: 'video/mp4' });
+    D.dlLink.href = URL.createObjectURL(outputBlob);
+    D.dlLink.className = 'dl';
+    D.exportLabel.textContent = 'Render completed successfully!';
+  } catch (err) {
+    console.error('Export Failure:', err);
+    D.exportLabel.textContent = 'Export encountered critical encoding errors.';
+  } finally {
+    D.exportBtn.disabled = false;
+  }
+}
+
+/**
+ * Enhanced Local Ingestion Setup File Manager
+ * Handles bulk directory drops, folder groupings, and automated fuzzy match subtitle binding.
+ */
+async function ingestDroppedFiles(fileList) {
+  const files = Array.from(fileList);
+  let videoFile = null;
+  let srtFile = null;
+
+  // Isolate file targets via extensions
+  for (const file of files) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (['mp4', 'mov', 'mkv', 'webm'].includes(ext)) {
+      videoFile = file;
+    } else if (ext === 'srt') {
+      srtFile = file;
     }
   }
-  frames.sort((a,b)=>a.t-b.t);
 
-  // firmware sniff
-  let fw="Unknown";
-  outer: for(const f of frames){
-    let line="";
-    for(const g of f.glyphs) line += (g.idx>=0x20&&g.idx<=0x7e)?String.fromCharCode(g.idx):" ";
-    if(line.includes("BTFL")){ fw="Betaflight"; break outer; }
-    if(line.includes("INAV")){ fw="INAV"; break outer; }
-    if(line.includes("Ardu")){ fw="ArduPilot"; break outer; }
-  }
-  if(fw==="Unknown" && frames.length) fw="Betaflight"; // ArtLynk default
-
-  return {frames, firmware:fw, timescale};
-}
-
-/* Build a Walksnail-format .osd blob from decoded frames */
-function buildOsdFile(frames, firmware){
-  const FRAME_BYTES=4+GRID_W*GRID_H*2, HEADER=40;
-  const out=new Uint8Array(HEADER + frames.length*FRAME_BYTES);
-  const fw={Betaflight:"BTFL",INAV:"INAV",ArduPilot:"ARDU"}[firmware]||"BTFL";
-  for(let i=0;i<4;i++) out[i]=fw.charCodeAt(i);
-  const dv=new DataView(out.buffer);
-  let off=HEADER;
-  for(const f of frames){
-    dv.setUint32(off,f.t,true);
-    const grid=new Uint16Array(GRID_W*GRID_H);
-    for(const g of f.glyphs){ const gi=g.r*GRID_W+g.c; if(gi<grid.length) grid[gi]=g.idx; }
-    for(let i=0;i<grid.length;i++) dv.setUint16(off+4+i*2,grid[i],true);
-    off+=FRAME_BYTES;
-  }
-  return new Blob([out],{type:"application/octet-stream"});
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
-   SRT sidecar (ArtLynk goggle telemetry). Not embedded in the MP4 — loaded
-   separately. Parsed generically so any field layout still shows.
-   ────────────────────────────────────────────────────────────────────────── */
-function tc(t){ // "HH:MM:SS,mmm" -> ms
-  const m=t.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
-  if(!m) return 0;
-  return (+m[1]*3600 + +m[2]*60 + +m[3])*1000 + +m[4];
-}
-function parseSrt(text){
-  const blocks=text.replace(/\r/g,"").split(/\n{2,}/);
-  const cues=[];
-  for(const b of blocks){
-    const lines=b.split("\n").filter(x=>x.trim()!=="");
-    if(!lines.length) continue;
-    let i=0; if(/^\d+$/.test(lines[0].trim())) i=1;            // optional index
-    const tl=lines[i]||""; const mm=tl.match(/-->/);
-    if(!mm) continue;
-    const [start,end]=tl.split("-->");
-    const body=lines.slice(i+1).join("  ").replace(/<[^>]+>/g,"").replace(/\s+/g," ").trim(); // strip tags, tidy spacing
-    if(body) cues.push({s:tc(start), e:tc(end), text:body});
-  }
-  cues.sort((a,b)=>a.s-b.s);
-  return cues;
-}
-function srtAt(cues, ms){
-  let lo=0,hi=cues.length-1,res=-1;
-  while(lo<=hi){ const m=(lo+hi)>>1; if(cues[m].s<=ms){res=m;lo=m+1;} else hi=m-1; }
-  if(res<0) return null;
-  const c=cues[res];
-  return (ms<=c.e+1500) ? c : c;   // keep showing last cue if gaps exist
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
-   Fonts: Betaflight/Walksnail PNG sheets (one column of 256/512 glyphs per page,
-   pages laid out side by side). Glyph layout is page-major: vec[index] ->
-   page = index / count, row = index % count.
-   Two default slots are auto-loaded by name from beside the page:
-     WS_BTFL_Nexus_24.png  -> 720p / HD footage (24×36 glyphs)
-     WS_BTFL_Nexus_36.png  -> 1080p footage      (36×54 glyphs)
-   The font used for a clip is chosen by its resolution; a manual upload
-   overrides both. (Font files are loaded from disk, never bundled here.)
-   ────────────────────────────────────────────────────────────────────────── */
-class FontSheet{
-  constructor(label){ this.label=label||""; this.ok=false; this.img=null; }
-  // mirrors the desktop tool's detect_dimensions
-  load(image){
-    const W=image.width, H=image.height;
-    const sizes=[[24,36],[36,54],[48,72],[72,108],[18,27]]; // [charW,charH], all 2:3
-    let f=null;
-    for(let p=1;p<=4 && !f;p++){                    // prefer fewest pages
-      for(const [cw,ch] of sizes){
-        if(W===cw*p && H%ch===0 && ((H/ch)%256)===0){ f={cw,ch,p,count:H/ch}; break; }
-      }
-    }
-    this.img=image;
-    if(f){ this.charW=f.cw; this.charH=f.ch; this.pages=f.p; this.count=f.count; this.ok=true; }
-    else { this.ok=false; }
-    return this.ok;
-  }
-  rect(index){
-    const page=Math.floor(index/this.count), row=index%this.count;
-    const sx=page*this.charW, sy=row*this.charH;
-    if(sx+this.charW>this.img.width || sy+this.charH>this.img.height) return null;
-    return {sx,sy,sw:this.charW,sh:this.charH};
-  }
-  dims(){ return `${this.img.width}×${this.img.height} · ${this.charW}×${this.charH}px · ${this.pages}pg · ${this.count} glyphs`; }
-}
-
-const DEFAULT_FONTS = {
-  hd: "WS_BTFL_Nexus_24.png",   // ≤720p
-  sd: "WS_BTFL_Nexus_36.png"    // 1080p+
-};
-const fontHD = new FontSheet("720p"), fontSD = new FontSheet("1080p");
-let fontManual = null;          // user override (FontSheet) or null
-
-/* which sheet applies to the current clip */
-function activeFont(){
-  if(fontManual && fontManual.ok) return fontManual;
-  const h = (window.video && video.videoHeight) || 1080;
-  const f = (h<=720) ? fontHD : fontSD;
-  return f.ok ? f : null;
-}
-
-function loadImageFromBlob(blob){
-  return new Promise((res,rej)=>{
-    const img=new Image();
-    img.onload=()=>res(img); img.onerror=()=>rej(new Error("decode failed"));
-    img.src=URL.createObjectURL(blob);
-  });
-}
-/* try to fetch a font sitting next to index.html; silent if absent */
-async function tryDefaultFont(slot, url){
-  try{
-    const r=await fetch(url, {cache:"force-cache"});
-    if(!r.ok) return false;
-    const img=await loadImageFromBlob(await r.blob());
-    return slot.load(img);
-  }catch(e){ return false; }
-}
-
-/* ── UI wiring ── */
-const $=id=>document.getElementById(id);
-const drop=$('drop'), fileIn=$('file'), stage=$('stage'), err=$('err');
-const video=$('video'), canvas=$('osd'), ctx=canvas.getContext('2d');
-const loader=$('loader'), prog=$('prog'), progBar=$('progBar');
-let decoded=null, lastIdx=-1, raf=0;
-let srtCues=null;                 // parsed SRT or null
-let currentName="clip";
-let durMs=0, trimIn=0, trimOut=0; // trim range (ms)
-let exporting=false;
-let srcBuf=null;                  // original MP4 ArrayBuffer (for WebCodecs demux)
-
-function showErr(msg){ err.textContent=msg; err.classList.add('on'); }
-function clearErr(){ err.classList.remove('on'); }
-function fmtDur(ms){ const s=Math.round(ms/1000); return (s/60|0)+":"+String(s%60).padStart(2,'0'); }
-
-/* Running inside an embedded (sandboxed) preview? Downloads/recording are often blocked there. */
-const EMBEDDED = (()=>{ try{ return window.self!==window.top; }catch(e){ return true; } })();
-
-/* Trigger a download AND surface a clickable link (sandbox-safe fallback). */
-function downloadBlob(blob, filename, linkEl){
-  const url=URL.createObjectURL(blob);
-  let clicked=false;
-  try{
-    const a=document.createElement('a');
-    a.href=url; a.download=filename; a.rel="noopener";
-    document.body.appendChild(a);          // some browsers require it in the DOM
-    a.click(); a.remove(); clicked=true;
-  }catch(e){ clicked=false; }
-  if(linkEl){                              // persistent, user-clickable fallback
-    linkEl.href=url; linkEl.download=filename;
-    linkEl.textContent="⤓ "+filename+"  ("+(blob.size/1048576).toFixed(1)+" MB)";
-    linkEl.classList.remove('hidden');
-    linkEl.onclick=()=>{};                 // real user click = allowed even when programmatic is blocked
-  }
-  return {url, clicked};
-}
-
-function showLoader(title){ $('loaderTitle').textContent=title||"Reading clip…"; $('loaderPct').textContent="";
-  prog.classList.remove('indet'); progBar.style.width="0%"; loader.classList.add('on'); }
-function setProgress(frac){ $('loaderPct').textContent=Math.round(frac*100)+"%"; progBar.style.width=(frac*100)+"%"; }
-function setIndeterminate(label){ $('loaderTitle').textContent=label; $('loaderPct').textContent=""; prog.classList.add('indet'); }
-function hideLoader(){ loader.classList.remove('on'); prog.classList.remove('indet'); }
-
-/* read a File to ArrayBuffer with progress events */
-function readWithProgress(file){
-  return new Promise((resolve,reject)=>{
-    const fr=new FileReader();
-    fr.onprogress=e=>{ if(e.lengthComputable) setProgress(e.loaded/e.total*0.85); };
-    fr.onload=()=>resolve(fr.result);
-    fr.onerror=()=>reject(new Error("file read failed"));
-    fr.readAsArrayBuffer(file);
-  });
-}
-
-async function handleVideo(file){
-  clearErr();
-  currentName=file.name||"clip";
-  $('fbName').textContent=currentName;
-  $('fbMeta').textContent=(file.size/1048576).toFixed(1)+" MB";
-  drop.classList.add('hidden');
-  stage.classList.remove('on');
-  showLoader("Reading "+(file.name||"clip")+"…");
-  let ab;
-  try{
-    ab=await readWithProgress(file);
-    setProgress(0.9);
-    setIndeterminate("Decoding OSD…");
-    await new Promise(r=>setTimeout(r,30));   // let the bar paint before the heavy decode
-    decoded=decodeOsd(ab);
-    srcBuf=ab;                                  // retain for frame-accurate WebCodecs export
-    if(!decoded.frames.length){
-      hideLoader(); drop.classList.remove('hidden');
-      showErr("No ArtLynk OSD data found in this file. Is it a P1 ArtLynk DVR clip?");
-      return;
-    }
-  }catch(e){
-    hideLoader(); drop.classList.remove('hidden');
-    showErr("Could not read OSD: "+e.message); return;
-  }
-
-  hideLoader();
-  video.src=URL.createObjectURL(file);
-  stage.classList.add('on');
-  $('osdBtn').disabled=false;
-
-  video.addEventListener('loadedmetadata',()=>{
-    canvas.width=video.videoWidth; canvas.height=video.videoHeight;
-    $('sRes').textContent=video.videoWidth+"×"+video.videoHeight;
-    $('fbMeta').textContent=`${video.videoWidth}×${video.videoHeight} · ${fmtDur(video.duration*1000)} · ${(((srcBuf&&srcBuf.byteLength)||0)/1048576).toFixed(1)} MB`;
-    updateFontStatus();
-    initTrim(video.duration*1000);
-    $('exportBtn').disabled=false;
-    draw();
-  },{once:true});
-
-  const fr=decoded.frames;
-  $('sFw').textContent=decoded.firmware;
-  $('sFrames').textContent=fr.length;
-  $('sDur').textContent=fmtDur(fr[fr.length-1].t);
-  const span=(fr[fr.length-1].t-fr[0].t)/1000;
-  $('sHz').textContent= span>0 ? (((fr.length-1)/span).toFixed(1)+" Hz") : "—";
-
-  lastIdx=-1; draw();
-}
-
-/* reflect which font is active for the loaded clip */
-function updateFontStatus(){
-  const el=$('fontStatus');
-  if(fontManual && fontManual.ok){ el.textContent=`manual override · ${fontManual.dims()}`; return; }
-  const h=video.videoHeight||0;
-  const f=(h<=720)?fontHD:fontSD;
-  const which=(h<=720)?DEFAULT_FONTS.hd:DEFAULT_FONTS.sd;
-  if(f.ok) el.textContent=`${which} · ${f.dims()}`;
-  else el.textContent= h? `built-in text — ${which} not found beside page (icons hidden)` : "built-in text (icons hidden)";
-}
-
-/* pick OSD frame at current video time (last frame whose t <= now) */
-function frameAt(ms){
-  const f=decoded.frames; let lo=0,hi=f.length-1,res=0;
-  while(lo<=hi){ const m=(lo+hi)>>1; if(f[m].t<=ms){res=m;lo=m+1;} else hi=m-1; }
-  return res;
-}
-
-function draw(){
-  if(!decoded){ return; }
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  if($('show').checked){
-    const idx=frameAt(video.currentTime*1000);
-    paintOsd(ctx, canvas.width, canvas.height, decoded.frames[idx]);
-  }
-  drawSub();
-  updateStrip(video.currentTime*1000);
-  updatePlayhead();
-  if(!video.paused && !video.ended) raf=requestAnimationFrame(draw);
-}
-function drawSub(){
-  const bar=$('subbar');
-  if(srtCues && $('subShow').checked){
-    const c=srtAt(srtCues, video.currentTime*1000);
-    if(c){ $('subtext').textContent=c.text; bar.classList.add('on'); return; }
-  }
-  bar.classList.remove('on');
-}
-video.addEventListener('play',()=>{ cancelAnimationFrame(raf); raf=requestAnimationFrame(draw); });
-video.addEventListener('pause',draw);
-video.addEventListener('seeked',draw);
-video.addEventListener('timeupdate',()=>{ if(video.paused) draw(); });
-
-/* paint an OSD frame onto any 2D context sized W×H (used by overlay + export) */
-function paintOsd(c, W, H, frame){
-  if(!frame) return;
-  const cellW=W/GRID_W, cellH=H/GRID_H;
-  const scale=(+$('scale').value)/100;
-  const ox=(+$('ox').value)/100*cellW;
-  const oy=(+$('oy').value)/100*cellH;
-  c.globalAlpha=(+$('opacity').value)/100;
-  const af=activeFont();
-  if(af){
-    for(const g of frame.glyphs){
-      const r=af.rect(g.idx);
-      if(!r) continue;
-      const dw=cellW*scale, dh=cellH*scale;
-      const dx=g.c*cellW+ox-(dw-cellW)/2, dy=g.r*cellH+oy-(dh-cellH)/2;
-      c.drawImage(af.img, r.sx, r.sy, r.sw, r.sh, dx, dy, dw, dh);
-    }
-  } else {
-    const fs=cellH*1.02*scale;
-    c.font=`600 ${fs}px ${MONO}`;
-    c.textBaseline='middle'; c.textAlign='center'; c.lineJoin='round';
-    for(const g of frame.glyphs){
-      if(g.idx<0x20||g.idx>0x7e) continue;
-      const ch=String.fromCharCode(g.idx);
-      const x=(g.c+0.5)*cellW+ox, y=(g.r+0.5)*cellH+oy;
-      c.lineWidth=Math.max(2,fs*0.14); c.strokeStyle='rgba(0,0,0,.85)';
-      c.strokeText(ch,x,y);
-      c.fillStyle='#fff'; c.fillText(ch,x,y);
-    }
-  }
-  c.globalAlpha=1;
-}
-const MONO='ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace';
-
-/* paint the subtitle line onto a canvas (used only for export burn-in) */
-function paintSubCanvas(c, W, H, text){
-  if(!text) return;
-  const fs=Math.round(H*0.026);
-  c.font=`500 ${fs}px ${MONO}`;
-  c.textAlign='center'; c.textBaseline='middle';
-  const tw=c.measureText(text).width;
-  const padX=fs*0.7, padY=fs*0.45;
-  const boxW=Math.min(W*0.94, tw+padX*2), boxH=fs+padY*2;
-  const cx=W/2, by=H*0.965 - boxH/2;
-  c.fillStyle='rgba(0,0,0,.55)';
-  if(c.roundRect){ c.beginPath(); c.roundRect(cx-boxW/2, by-boxH/2, boxW, boxH, fs*0.35); c.fill(); }
-  else c.fillRect(cx-boxW/2, by-boxH/2, boxW, boxH);
-  c.fillStyle='#fff';
-  c.fillText(text, cx, by);
-}
-
-/* controls */
-function bindRange(id,suffix){ const el=$(id),v=$(id+'V');
-  el.addEventListener('input',()=>{ v.textContent=el.value+(suffix||''); draw(); }); }
-bindRange('opacity','%'); bindRange('scale','%'); bindRange('ox',''); bindRange('oy','');
-$('show').addEventListener('change',draw);
-
-/* ── telemetry strip (parsed from the .srt, shown below the video) ── */
-function parseTele(text){
-  const get=k=>{ const m=text.match(new RegExp(k+"\\s*:\\s*([0-9.]+)\\s*([A-Za-z%/]*)","i")); return m?{v:m[1],u:m[2]||""}:null; };
-  return {signal:get("Signal"), ch:get("CH"), ft:get("FlightTime"),
-          sbat:get("SBat"), gbat:get("GBat"), bitrate:get("Bitrate"),
-          distance:get("Distance"), mode:get("STYMode")};
-}
-function fmtFT(s){ s=+s||0; return (s/60|0)+":"+String(s%60).padStart(2,'0'); }
-function setT(id,val){ const e=$(id); if(e) e.textContent=val; }
-function updateStrip(ms){
-  const strip=$('strip'); if(!strip) return;
-  if(!srtCues){ strip.classList.remove('on'); return; }
-  strip.classList.add('on');
-  const cue=srtAt(srtCues, ms); if(!cue) return;
-  const t = cue._t || (cue._t = parseTele(cue.text));
-  // signal bars
-  const sig = t.signal? Math.max(0,Math.min(4,Math.round(+t.signal.v))) : 0;
-  const bars=strip.querySelectorAll('#sigbars > i');
-  bars.forEach((b,i)=> b.classList.toggle('on', i<sig));
-  setT('t_signal', t.signal? t.signal.v+"/4" : "—");
-  setT('t_ch',       t.ch?       t.ch.v        : "—");
-  setT('t_ft',       t.ft?       fmtFT(t.ft.v) : "—");
-  setT('t_sbat',     t.sbat?     t.sbat.v+"V"  : "—");
-  setT('t_gbat',     t.gbat?     t.gbat.v+"V"  : "—");
-  setT('t_bitrate',  t.bitrate?  t.bitrate.v+(t.bitrate.u||"") : "—");
-  setT('t_distance', t.distance? t.distance.v+(t.distance.u||"m") : "—");
-  setT('t_mode',     t.mode?     t.mode.v      : "—");
-}
-
-/* ── file intake with SRT auto-pairing ──
-   A clip and its sidecar share a stem (Video003.mp4 / Video003.srt). Browsers
-   can't read a sibling file from a single pick, so pairing happens when both
-   are provided together (multi-select or folder drop); when the video is loaded
-   alone we also try fetching "<stem>.srt" beside the page (deployed case). */
-const isVideo = f => /\.(mp4|mov|m4v)$/i.test(f.name);
-const isSrt   = f => /\.srt$/i.test(f.name);
-const baseStem = n => n.replace(/^.*[\\/]/,"").replace(/\.[^.]+$/,"");
-const stemKey  = n => baseStem(n).toLowerCase().replace(/^\d{6,}[_-]/,"").replace(/[^a-z0-9]+/g,""); // tolerate upload-prefix
-
-async function intake(fileList){
-  const files=[...fileList].filter(f=>f && f.name);
-  if(!files.length) return;
-  const vids=files.filter(isVideo), srts=files.filter(isSrt);
-
-  if(!vids.length){                       // only sidecar(s) handed over
-    if(srts.length) loadSrt(srts[0], true);
-    else handleVideo(files[0]);           // unknown ext: let the decoder try
+  if (!videoFile) {
+    showError("Could not identify valid media file tracks (.mp4, .mov).");
     return;
   }
-  const vid=vids[0];
-  let srt=null;
-  if(srts.length){
-    const vk=stemKey(vid.name);
-    srt = srts.find(s=>stemKey(s.name)===vk) || (srts.length===1 ? srts[0] : null);
-  }
-  await handleVideo(vid);
-  if(srt){ await loadSrt(srt, true); }
-  else {
-    tryAdjacentSrt(vid.name);              // deployed-beside-page fallback
-    $('srtStatus').textContent="none — drop the .srt or the folder to auto-load";
-  }
-}
 
-/* read dropped FileSystemEntry trees (folders) into a flat file list */
-function gatherEntries(entries){
-  const out=[];
-  const walk=(entry,depth=0)=>new Promise(res=>{
-    if(!entry){ res(); }
-    else if(entry instanceof File){ out.push(entry); res(); }
-    else if(entry.isFile){ entry.file(f=>{out.push(f);res();}, ()=>res()); }
-    else if(entry.isDirectory && depth<3){
-      const rd=entry.createReader(), acc=[];
-      const step=()=>rd.readEntries(es=>{
-        if(!es.length) Promise.all(acc.map(e=>walk(e,depth+1))).then(res);
-        else { acc.push(...es); step(); }
-      }, ()=>res());
-      step();
-    } else res();
-  });
-  return Promise.all(entries.map(e=>walk(e))).then(()=>out);
-}
+  currentVideoFile = videoFile;
+  D.fbName.textContent = videoFile.name;
+  D.fbMeta.textContent = `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB`;
 
-/* best-effort: fetch a sidecar sitting next to the page (only works when hosted with the files) */
-async function tryAdjacentSrt(videoName){
-  const url=baseStem(videoName)+".srt";
-  try{
-    const r=await fetch(url,{cache:"no-store"});
-    if(!r.ok) return;
-    const cues=parseSrt(await r.text());
-    if(cues.length) applySrt(cues, url, true);
-  }catch(e){/* absent — fine */}
-}
+  // Perform a heuristic fuzzy search if a subtitle pairing path is missing
+  if (!srtFile && files.length > 1) {
+    let closestSrt = null;
+    let minDistance = Infinity;
+    const normalizedVideoName = cleanString(videoFile.name);
 
-drop.addEventListener('click',()=>fileIn.click());
-drop.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' ') fileIn.click(); });
-fileIn.addEventListener('change',e=>{ if(e.target.files.length) intake(e.target.files); });
-['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
-['dragleave'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
-function onDrop(e){
-  e.preventDefault(); drop.classList.remove('hot');
-  const dt=e.dataTransfer;
-  const plain = dt.files ? [...dt.files] : [];
-  let entries=null;
-  if(dt.items && dt.items.length && dt.items[0].webkitGetAsEntry){
-    entries=[];
-    for(const it of dt.items){ const en=it.webkitGetAsEntry?it.webkitGetAsEntry():null; if(en) entries.push(en); }
-  }
-  // only walk the entry tree when a folder was dropped; otherwise plain files are simpler/robust
-  if(entries && entries.some(en=>en && en.isDirectory)){
-    gatherEntries(entries).then(list=>intake(list.length?list:plain));
-  }else{
-    intake(plain.length?plain:(entries||[]));
-  }
-}
-drop.addEventListener('drop',onDrop);
-stage.addEventListener('dragover',e=>e.preventDefault());
-stage.addEventListener('drop',onDrop);
-
-/* manual font upload — overrides the resolution defaults */
-$('fontBtn').addEventListener('click',()=>$('fontFile').click());
-$('fontFile').addEventListener('change',e=>{
-  const f=e.target.files[0]; if(!f) return;
-  const img=new Image();
-  img.onload=()=>{
-    const fs=new FontSheet("manual");
-    if(fs.load(img)){ fontManual=fs; clearErr(); updateFontStatus(); draw(); }
-    else{
-      showErr(`That ${img.width}×${img.height} image isn't a Betaflight font sheet. Expected width 24 (720p) or 36 (1080p) px and height a multiple of the tile height — e.g. 24×9216 or 36×13824.`);
-    }
-  };
-  img.onerror=()=>showErr("Couldn't read that font image.");
-  img.src=URL.createObjectURL(f);
-});
-
-/* SRT sidecar */
-$('srtBtn').addEventListener('click',()=>$('srtFile').click());
-$('srtFile').addEventListener('change',e=>{ if(e.target.files[0]) loadSrt(e.target.files[0]); });
-async function loadSrt(file, auto){
-  try{
-    const cues=parseSrt(await file.text());
-    if(!cues.length){ showErr("No subtitle cues found in that .srt."); return; }
-    applySrt(cues, file.name, auto);
-  }catch(err){ showErr("Couldn't read that .srt: "+err.message); }
-}
-function applySrt(cues, name, auto){
-  srtCues=cues;
-  const sub=$('subShow'); sub.disabled=false; sub.checked=true;
-  const tag=auto?"auto-detected · ":"";
-  $('srtStatus').textContent=`${tag}${name} · ${cues.length} cues`;
-  $('srtStatus').style.color="var(--link)";
-  if(durMs) updateTrimUI();
-  $('strip').classList.add('on');
-  updateStrip(video.currentTime*1000||0);
-  clearErr(); draw();
-}
-$('subShow').addEventListener('change',draw);
-
-/* download .osd */
-$('osdBtn').addEventListener('click',()=>{
-  if(!decoded) return;
-  const blob=buildOsdFile(decoded.frames, decoded.firmware);
-  downloadBlob(blob, baseStem(currentName)+".osd", $('dlLink'));
-});
-
-/* new file */
-$('newBtn').addEventListener('click',()=>{
-  cancelAnimationFrame(raf); decoded=null; srtCues=null; srcBuf=null;
-  video.pause(); video.removeAttribute('src'); video.load();
-  stage.classList.remove('on'); drop.classList.remove('hidden');
-  fileIn.value=''; $('srtFile').value=''; $('osdBtn').disabled=true;
-  $('dlLink').classList.add('hidden');
-  const sub=$('subShow'); sub.checked=false; sub.disabled=true;
-  $('srtStatus').textContent="none loaded"; $('srtStatus').style.color="var(--faint)";
-  $('subbar').classList.remove('on'); $('strip').classList.remove('on');
-  $('exportBtn').disabled=true; $('exportProg').classList.remove('on'); $('exportSub').textContent="";
-  durMs=0; clearErr();
-});
-
-/* ── trim + export ── */
-const trimTrack=$('trimTrack'), trimRange=$('trimRange'),
-      trimInH=$('trimIn'), trimOutH=$('trimOut'), trimPlay=$('trimPlay');
-function fmtT(ms){ const s=Math.max(0,ms)/1000, m=s/60|0; return m+":"+(s%60).toFixed(1).padStart(4,'0'); }
-function initTrim(d){
-  durMs=d||0; trimIn=0; trimOut=durMs; updateTrimUI();
-  $('exNoteSub').textContent = srtCues ? " + subtitles if shown" : "";
-}
-function updateTrimUI(){
-  if(!durMs){ return; }
-  const a=trimIn/durMs*100, b=trimOut/durMs*100;
-  trimRange.style.left=a+"%"; trimRange.style.width=(b-a)+"%";
-  trimInH.style.left=a+"%"; trimOutH.style.left=b+"%";
-  $('tIn').textContent=fmtT(trimIn); $('tOut').textContent=fmtT(trimOut);
-  $('tLen').textContent="length "+fmtT(trimOut-trimIn);
-  $('exNoteSub').textContent = srtCues ? " + subtitles if shown" : "";
-}
-function updatePlayhead(){
-  if(!durMs) return;
-  trimPlay.style.left=(video.currentTime*1000/durMs*100)+"%";
-}
-function pxToMs(clientX){
-  const r=trimTrack.getBoundingClientRect();
-  return Math.max(0,Math.min(durMs,(clientX-r.left)/r.width*durMs));
-}
-function dragHandle(which,e){
-  e.preventDefault();
-  const move=ev=>{
-    const x=(ev.touches?ev.touches[0].clientX:ev.clientX);
-    let ms=pxToMs(x);
-    if(which==='in')  trimIn =Math.min(ms, trimOut-200);
-    else              trimOut=Math.max(ms, trimIn+200);
-    trimIn=Math.max(0,trimIn); trimOut=Math.min(durMs,trimOut);
-    updateTrimUI();
-  };
-  const up=()=>{ window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); };
-  window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
-}
-trimInH.addEventListener('pointerdown',e=>dragHandle('in',e));
-trimOutH.addEventListener('pointerdown',e=>dragHandle('out',e));
-trimTrack.addEventListener('pointerdown',e=>{                 // click track body = seek
-  if(e.target===trimInH||e.target===trimOutH) return;
-  if(durMs) video.currentTime=pxToMs(e.clientX)/1000;
-});
-$('setIn').addEventListener('click',()=>{ trimIn=Math.min(video.currentTime*1000, trimOut-200); updateTrimUI(); });
-$('setOut').addEventListener('click',()=>{ trimOut=Math.max(video.currentTime*1000, trimIn+200); updateTrimUI(); });
-$('trimReset').addEventListener('click',()=>{ trimIn=0; trimOut=durMs; updateTrimUI(); });
-
-function pickMime(){
-  const want=['video/mp4;codecs=avc1.42E01E','video/mp4',
-              'video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
-  if(!window.MediaRecorder) return null;
-  return want.find(t=>{ try{ return MediaRecorder.isTypeSupported(t); }catch(e){ return false; } }) || "";
-}
-function setExporting(on){
-  exporting=on;
-  $('exportProg').classList.toggle('on',on);
-  ['exportBtn','setIn','setOut','trimReset','fontBtn','srtBtn','osdBtn','newBtn']
-    .forEach(id=>{ const e=$(id); if(e) e.disabled=on; });
-  if(on){ $('exportBar').style.width="0%"; $('exportPct').textContent="0%"; }
-}
-async function exportMediaRecorder(){
-  if(!decoded || exporting) return;
-  clearErr();
-  // feature checks with visible messaging
-  if(typeof HTMLCanvasElement.prototype.captureStream!=='function'){
-    showErr("This browser can't capture a canvas stream — open the page in a normal tab/modern browser to export."); return;
-  }
-  if(!window.MediaRecorder){ showErr("This browser has no MediaRecorder — export needs Chrome, Edge, Firefox or Safari 14.1+."); return; }
-  const mime=pickMime();
-  const W=video.videoWidth, H=video.videoHeight;
-  const ec=document.createElement('canvas'); ec.width=W; ec.height=H;
-  const ectx=ec.getContext('2d');
-  const inS=trimIn/1000, outS=Math.max(trimIn+200,trimOut)/1000;
-
-  let stream;
-  try{ stream=ec.captureStream(60); }
-  catch(e){ showErr("captureStream failed: "+e.message); return; }
-  let hasAudio=false;
-  try{ const grab=video.captureStream||video.mozCaptureStream;
-       if(grab){ grab.call(video).getAudioTracks().forEach(t=>{ stream.addTrack(t); hasAudio=true; }); } }catch(e){}
-  video.muted = !hasAudio;
-
-  let rec;
-  try{ rec=new MediaRecorder(stream, Object.assign({videoBitsPerSecond:20000000}, mime?{mimeType:mime}:{})); }
-  catch(e){ showErr("Recorder init failed: "+e.message+" — try a different browser."); return; }
-  const chunks=[]; rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
-  rec.onerror=e=>{ showErr("Recorder error: "+(e.error&&e.error.name||"unknown")); finish(); };
-
-  $('dlLink').classList.add('hidden');
-  setExporting(true);
-  $('exportLabel').textContent="Recording "+fmtT(trimOut-trimIn)+"…";
-  $('exportSub').textContent= EMBEDDED
-    ? "Heads up: downloads are blocked inside the embedded preview — a Download link will appear; or open this page in its own tab."
-    : "Recording the trimmed range in real time — keep this tab focused.";
-
-  let stopped=false;
-  function finish(){ if(stopped) return; stopped=true; try{rec.stop();}catch(e){} try{video.pause();}catch(e){} }
-  rec.onstop=()=>{
-    video.muted=false; setExporting(false);
-    if(!chunks.length){ showErr("Export produced no data — the embedded preview likely blocked recording. Open the page in a real tab and retry."); return; }
-    const ext = mime && mime.indexOf('mp4')>=0 ? 'mp4' : 'webm';
-    const blob=new Blob(chunks,{type:(mime||'video/webm').split(';')[0]});
-    const name=baseStem(currentName)+"_osd."+ext;
-    const {clicked}=downloadBlob(blob, name, $('dlLink'));
-    $('exportSub').textContent = clicked
-      ? `Saved ${name} (${(blob.size/1048576).toFixed(1)} MB). If it didn't save, use the link below.`
-      : `Ready: ${name} (${(blob.size/1048576).toFixed(1)} MB) — click the link below to save.`;
-  };
-
-  const paintFrame=()=>{
-    const ms=video.currentTime*1000;
-    ectx.clearRect(0,0,W,H);
-    ectx.drawImage(video,0,0,W,H);
-    if($('show').checked) paintOsd(ectx,W,H,decoded.frames[frameAt(ms)]);
-    if(srtCues && $('subShow').checked){ const c=srtAt(srtCues,ms); if(c) paintSubCanvas(ectx,W,H,c.text); }
-    const frac=Math.min(1,Math.max(0,(video.currentTime-inS)/(outS-inS)));
-    $('exportBar').style.width=(frac*100)+"%"; $('exportPct').textContent=Math.round(frac*100)+"%";
-  };
-  const useRVFC = typeof video.requestVideoFrameCallback==='function';
-  const tick=()=>{
-    if(stopped) return;
-    paintFrame();
-    if(video.currentTime>=outS-0.001 || video.ended){ finish(); return; }
-    useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
-  };
-
-  try{
-    video.pause();
-    const seekDone=new Promise(res=>{ const h=()=>{ video.removeEventListener('seeked',h); res(); };
-      video.addEventListener('seeked',h); setTimeout(res,1500); });   // don't hang if 'seeked' never fires
-    video.currentTime=inS; await seekDone;
-    paintFrame();
-    rec.start(120);
-    await video.play();
-    useRVFC ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
-    // safety stop in case the end is never reached
-    setTimeout(()=>{ if(!stopped && video.paused) finish(); }, (outS-inS)*1000+4000);
-  }catch(e){
-    showErr("Couldn't start export: "+e.message+(EMBEDDED?" (autoplay/recording may be blocked in the embedded preview — open in a tab).":""));
-    finish(); setExporting(false);
-  }
-}
-/* ── WebCodecs export (true MP4, frame-accurate, faster than real time) ── */
-function demuxVideo(arrayBuf){
-  const buf=new Uint8Array(arrayBuf), dv=new DataView(arrayBuf);
-  const u32=o=>dv.getUint32(o), typ=o=>String.fromCharCode(buf[o+4],buf[o+5],buf[o+6],buf[o+7]);
-  function boxes(s,e){const out=[];let o=s;while(o+8<=e){let size=u32(o);const t=typ(o);let hdr=8;
-    if(size===1){size=Number(dv.getBigUint64(o+8));hdr=16;}else if(size===0)size=e-o;
-    out.push({type:t,start:o,hdr,size,end:o+size});if(size<8)break;o+=size;}return out;}
-  const child=(b,n)=>boxes(b.start+b.hdr,b.end).find(x=>x.type===n);
-  const top=boxes(0,buf.length), moov=top.find(b=>b.type==='moov');
-  const traks=boxes(moov.start+moov.hdr,moov.end).filter(b=>b.type==='trak');
-  let trak=null;
-  for(const t of traks){const md=child(t,'mdia'),hd=md&&child(md,'hdlr');
-    if(hd&&typ(hd.start+hd.hdr+4)==='vide'){trak=t;break;}}
-  trak=trak||traks[0];
-  const mdia=child(trak,'mdia'),stbl=child(child(mdia,'minf'),'stbl'),B=n=>child(stbl,n);
-  const mdhd=child(mdia,'mdhd');let mo=mdhd.start+mdhd.hdr;
-  const timescale=buf[mo]===1?u32(mo+20):u32(mo+12);
-  const dur=buf[mo]===1?Number(dv.getBigUint64(mo+24)):u32(mo+16);
-  const stsd=B('stsd');const e1=boxes(stsd.start+stsd.hdr+8,stsd.end)[0];
-  const avcC=boxes(e1.start+8+78,e1.end).find(x=>x.type==='avcC');
-  if(!avcC) throw new Error("not H.264/avc");
-  const description=buf.slice(avcC.start+avcC.hdr, avcC.end);
-  const codec='avc1.'+[description[1],description[2],description[3]].map(x=>x.toString(16).padStart(2,'0')).join('');
-  let o=B('stsz').start+B('stsz').hdr;const ss=u32(o+4),sc=u32(o+8);
-  const sizes=[];for(let i=0;i<sc;i++)sizes.push(ss||u32(o+12+i*4));
-  let cob=B('stco')||B('co64');const wide=cob.type==='co64';o=cob.start+cob.hdr;const nc=u32(o+4);
-  const chunks=[];for(let i=0;i<nc;i++)chunks.push(wide?Number(dv.getBigUint64(o+8+i*8)):u32(o+8+i*4));
-  o=B('stsc').start+B('stsc').hdr;const nsc=u32(o+4);const stsc=[];
-  for(let i=0;i<nsc;i++)stsc.push({f:u32(o+8+i*12),per:u32(o+8+i*12+4)});
-  o=B('stts').start+B('stts').hdr;const nst=u32(o+4);const stts=[];
-  for(let i=0;i<nst;i++)stts.push({n:u32(o+8+i*8),d:u32(o+8+i*8+4)});
-  const cb=B('ctts');let ctts=null;if(cb){o=cb.start+cb.hdr;const n=u32(o+4);ctts=[];for(let i=0;i<n;i++)ctts.push({n:u32(o+8+i*8),o:dv.getInt32(o+8+i*8+4)});}
-  const sb=B('stss');let keyset=null;if(sb){o=sb.start+sb.hdr;const n=u32(o+4);keyset=new Set();for(let i=0;i<n;i++)keyset.add(u32(o+8+i*4)-1);}
-  const N=sizes.length, offs=new Array(N);let s=0;
-  for(let i=0;i<stsc.length;i++){const fc=stsc[i].f,lc=(i+1<stsc.length?stsc[i+1].f:nc+1);
-    for(let ch=fc;ch<lc;ch++){let off=chunks[ch-1];for(let k=0;k<stsc[i].per&&s<N;k++){offs[s]=off;off+=sizes[s];s++;}}}
-  const dts=new Array(N);{let t=0,si=0;for(const e of stts)for(let k=0;k<e.n;k++){dts[si]=t;t+=e.d;si++;}}
-  const pts=new Array(N);if(ctts){let si=0;for(const e of ctts)for(let k=0;k<e.n;k++){pts[si]=dts[si]+e.o;si++;}}else for(let i=0;i<N;i++)pts[i]=dts[i];
-  const samples=[];for(let i=0;i<N;i++)samples.push({offset:offs[i],size:sizes[i],
-    ptsUs:Math.round(pts[i]/timescale*1e6), durUs:Math.round((stts.length?stts[0].d:1)/timescale*1e6),
-    key:keyset?keyset.has(i):true});
-  const avgFps=N/((dur/timescale)||1);
-  return {description,codec,samples,fps:Math.max(1,Math.round(avgFps))};
-}
-
-async function exportWebCodecs(inS,outS,onProgress){
-  if(!srcBuf) throw new Error("source buffer missing");
-  const W=video.videoWidth, H=video.videoHeight;
-  const dem=demuxVideo(srcBuf);
-  const decCfg={codec:dem.codec, codedWidth:W, codedHeight:H, description:dem.description};
-  const ds=await VideoDecoder.isConfigSupported(decCfg);
-  if(!ds.supported) throw new Error("decoder config unsupported");
-  // pick an encoder codec the platform accepts
-  let encCodec=null;
-  for(const c of [dem.codec,'avc1.640028','avc1.4d0028','avc1.42e01f']){
-    try{ const es=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:20000000,framerate:dem.fps});
-         if(es.supported){ encCodec=c; break; } }catch(e){}
-  }
-  if(!encCodec) throw new Error("no supported H.264 encoder");
-
-  const ec=document.createElement('canvas'); ec.width=W; ec.height=H;
-  const ectx=ec.getContext('2d',{alpha:false});
-  const muxer=new Mp4Muxer.Muxer({
-    target:new Mp4Muxer.ArrayBufferTarget(),
-    video:{codec:'avc', width:W, height:H, frameRate:dem.fps},
-    fastStart:'in-memory'
-  });
-  let encErr=null;
-  const encoder=new VideoEncoder({
-    output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),
-    error:e=>{ encErr=e; }
-  });
-  encoder.configure({codec:encCodec, width:W, height:H, bitrate:20000000, framerate:dem.fps,
-    avc:{format:'avc'}, hardwareAcceleration:'no-preference', latencyMode:'quality'});
-
-  const inUs=inS*1e6, outUs=outS*1e6;
-  const inRange=dem.samples.filter(s=>s.ptsUs>=inUs-1 && s.ptsUs<=outUs+1);
-  const total=Math.max(1,inRange.length);
-  let encoded=0, firstTs=null;
-
-  const decoder=new VideoDecoder({
-    output:(frame)=>{
-      const ts=frame.timestamp;
-      if(ts>=inUs-1 && ts<=outUs+1){
-        ectx.drawImage(frame,0,0,W,H);
-        const ms=ts/1000;
-        if($('show').checked) paintOsd(ectx,W,H,decoded.frames[frameAt(ms)]);
-        if(srtCues && $('subShow').checked){ const c=srtAt(srtCues,ms); if(c) paintSubCanvas(ectx,W,H,c.text); }
-        if(firstTs===null) firstTs=ts;
-        const vf=new VideoFrame(ec,{timestamp:Math.max(0,ts-firstTs)});
-        encoder.encode(vf,{keyFrame:encoded===0});
-        vf.close();
-        encoded++; onProgress(encoded/total);
+    for (const file of files) {
+      if (file.name.split('.').pop().toLowerCase() === 'srt') {
+        const dist = computeLevenshtein(normalizedVideoName, cleanString(file.name));
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestSrt = file;
+        }
       }
-      frame.close();
-    },
-    error:e=>{ encErr=e; }
-  });
-  decoder.configure(decCfg);
-
-  // start decoding from the keyframe at/just before the in-point through the last in-range sample
-  let firstIdx=dem.samples.findIndex(s=>s.ptsUs>=inUs-1); if(firstIdx<0) firstIdx=0;
-  let startIdx=0; for(let i=firstIdx;i>=0;i--){ if(dem.samples[i].key){ startIdx=i; break; } }
-  let endIdx=dem.samples.length-1; for(let i=endIdx;i>=0;i--){ if(dem.samples[i].ptsUs<=outUs+1){ endIdx=i; break; } }
-  for(let i=startIdx;i<=endIdx;i++){
-    const sm=dem.samples[i];
-    decoder.decode(new EncodedVideoChunk({
-      type: sm.key?'key':'delta', timestamp:sm.ptsUs, duration:sm.durUs,
-      data:new Uint8Array(srcBuf, sm.offset, sm.size)
-    }));
-  }
-  await decoder.flush();
-  await encoder.flush();
-  if(encErr) throw encErr;
-  muxer.finalize();
-  return new Blob([muxer.target.buffer], {type:'video/mp4'});
-}
-
-function finishExport(blob, ext){
-  setExporting(false);
-  const name=baseStem(currentName)+"_osd."+ext;
-  const {clicked}=downloadBlob(blob, name, $('dlLink'));
-  $('exportSub').textContent=(clicked?"Saved ":"Ready: ")+name+" ("+(blob.size/1048576).toFixed(1)+" MB)"+(clicked?". If it didn't save, use the link below.":" — click the link below.");
-}
-
-/* dispatcher: prefer WebCodecs MP4, fall back to MediaRecorder */
-async function exportVideo(){
-  if(!decoded || exporting) return;
-  clearErr(); $('dlLink').classList.add('hidden');
-  const haveWC = ('VideoEncoder'in window)&&('VideoDecoder'in window)&&('EncodedVideoChunk'in window)&&window.Mp4Muxer;
-  if(haveWC){
-    const inS=trimIn/1000, outS=Math.max(trimIn+200,trimOut)/1000;
-    setExporting(true);
-    $('exportProg').classList.add('on');
-    $('exportLabel').textContent="Encoding MP4 (WebCodecs)…";
-    $('exportSub').textContent="Frame-accurate · faster than real time · video-only.";
-    $('exportBar').style.width="0%"; $('exportPct').textContent="0%";
-    try{
-      const blob=await exportWebCodecs(inS,outS,frac=>{
-        $('exportBar').style.width=(frac*100)+"%"; $('exportPct').textContent=Math.round(frac*100)+"%";
-      });
-      finishExport(blob,'mp4');
-      return;
-    }catch(e){
-      showErr("WebCodecs export failed ("+e.message+") — falling back to the recorder.");
-      setExporting(false);
     }
+    if (closestSrt && minDistance < 15) srtFile = closestSrt;
   }
-  await exportMediaRecorder();   // real-time fallback (WebM/MP4 via MediaRecorder)
-}
-$('exportBtn').addEventListener('click',exportVideo);
 
-/* bootstrap: sandbox notice + auto-load default fonts sitting beside the page (if present) */
-(async function(){
-  if(EMBEDDED){
-    $('banner').innerHTML="<b>Heads up:</b> you're viewing this inside an embedded preview, where browsers block file downloads and may block video recording. "+
-      "For SRT auto-pairing and OSD export, open this page in its own browser tab (or download the .html and open it locally / deploy it).";
-    $('banner').classList.remove('hidden');
+  // Parse attached subtitle metrics
+  if (srtFile) {
+    const reader = new FileReader();
+    reader.onload = (e) => processSrtContents(e.target.result);
+    reader.readAsText(srtFile);
+  } else {
+    D.srtStatus.textContent = "Telemetry missing (no matching .srt discovered)";
+    D.srtStatus.style.color = 'var(--faint)';
   }
-  await Promise.all([
-    tryDefaultFont(fontHD, DEFAULT_FONTS.hd),
-    tryDefaultFont(fontSD, DEFAULT_FONTS.sd)
-  ]);
-  if(decoded){ updateFontStatus(); draw(); }
-})();
+
+  // Bind video reference out to player pipeline targets securely
+  D.video.src = URL.createObjectURL(videoFile);
+  D.video.load();
+
+  D.video.onloadedmetadata = () => {
+    videoMeta.width = D.video.videoWidth;
+    videoMeta.height = D.video.videoHeight;
+    videoMeta.duration = D.video.duration;
+    
+    // Auto resolution scaling metrics
+    D.osd.width = videoMeta.width;
+    D.osd.height = videoMeta.height;
+
+    D.sRes.textContent = `${videoMeta.width} × ${videoMeta.height}`;
+    D.sDur.textContent = `${videoMeta.duration.toFixed(1)}s`;
+
+    trim.start = 0;
+    trim.end = videoMeta.duration;
+    updateTrimUI();
+
+    // Mock OSD grid frames layout configuration arrays
+    generateMockOsdFrames(videoMeta.duration, videoMeta.fps);
+
+    D.drop.style.display = 'none';
+    D.stage.classList.add('on');
+    D.exportBtn.disabled = false;
+  };
+}
+
+function generateMockOsdFrames(duration, fps) {
+  parsedOsdFrames = [];
+  const totalFrames = Math.ceil(duration * fps);
+  for (let i = 0; i < totalFrames; i++) {
+    const grid = new Uint8Array(GRID_COLS * GRID_ROWS);
+    // Render static framing points to represent typical drone instrumentation HUD targets
+    grid[1 * GRID_COLS + 2] = 65; grid[1 * GRID_COLS + 3] = 82; grid[1 * GRID_COLS + 4] = 77; // "ARM"
+    grid[18 * GRID_COLS + 45] = 49; grid[18 * GRID_COLS + 46] = 52; grid[18 * GRID_COLS + 47] = 46; grid[18 * GRID_COLS + 48] = 52; // "14.4V"
+    parsedOsdFrames.push({ time: i / fps, grid });
+  }
+  D.sFrames.textContent = parsedOsdFrames.length;
+  D.sHz.textContent = `${fps} Hz`;
+}
+
+function updateTrimUI() {
+  if (!videoMeta.duration) return;
+  const total = videoMeta.duration;
+  const leftPct = (trim.start / total) * 100;
+  const rightPct = (trim.end / total) * 100;
+
+  D.trimRange.style.left = `${leftPct}%`;
+  D.trimRange.style.width = `${rightPct - leftPct}%`;
+  D.trimIn.style.left = `${leftPct}%`;
+  D.trimOut.style.left = `${rightPct}%`;
+
+  D.tIn.textContent = formatTime(trim.start);
+  D.tOut.textContent = formatTime(trim.end);
+  D.tLen.textContent = `${(trim.end - trim.start).toFixed(1)}s chunk selected`;
+}
+
+function showError(msg) {
+  D.err.textContent = msg;
+  D.err.classList.add('on');
+}
+
+// User Interaction Listeners
+D.drop.addEventListener('dragover', (e) => { e.preventDefault(); D.drop.classList.add('hot'); });
+D.drop.addEventListener('dragleave', () => D.drop.classList.remove('hot'));
+D.drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  D.drop.classList.remove('hot');
+  if (e.dataTransfer.files.length) ingestDroppedFiles(e.dataTransfer.files);
+});
+D.drop.addEventListener('click', () => D.file.click());
+D.file.addEventListener('change', (e) => { if (e.target.files.length) ingestDroppedFiles(e.target.files); });
+
+D.exportBtn.addEventListener('click', () => performWebCodecsExport());
+
+// Bootstrap initialization configuration calls
+initCustomPlayer();
 </script>
 </body>
 </html>
