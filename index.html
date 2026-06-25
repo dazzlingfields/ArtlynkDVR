@@ -70,7 +70,10 @@
   .brhead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
   .brhead .brtitle { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
   .brhead .brnow { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--link); }
-  .brgraph { display: block; width: 100%; height: 84px; }
+  .brgraph { display: block; width: 100%; height: 96px; }
+  .filebar .clipfilter { font-family: var(--mono); font-size: 11px; color: var(--faint); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .filebar .minsec { width: 46px; font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+  .filebar .minsec:hover, .filebar .minsec:focus { border-color: var(--link); outline: none; }
 
   /* Immersive Screen Framework */
   .screen { position: relative; border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--line); }
@@ -225,6 +228,9 @@
       <svg viewBox="0 0 24 24" class="fbicon"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5M16 4v5"/></svg>
       <span class="fbname" id="fbName">—</span>
       <select id="clipSel" class="clipsel hidden" aria-label="Select clip from folder"></select>
+      <label class="clipfilter hidden" id="clipFilter" title="Hide clips shorter than this many seconds">
+        min <input id="minDur" type="number" min="0" step="1" value="5" class="minsec"> s
+      </label>
       <span class="fbmeta" id="fbMeta"></span>
       <button class="fbload" id="loadBtn" type="button" title="Load another video">+ Load video</button>
     </div>
@@ -777,7 +783,9 @@ $('folderBtn').addEventListener('click', () => $('folderFile').click());
 $('folderFile').addEventListener('change', () => { if ($('folderFile').files.length) handleFolder([...$('folderFile').files]); });
 
 /* ---- Session clip browser: remember a folder, switch clips, auto-pull each SRT ---- */
-let sessionClips = [];   // [{ name, getVideo:()=>Promise<File>, getSrt:()=>Promise<File|null> }]
+let sessionClips = [];   // filtered list shown in the dropdown
+let allClips = [];       // full list (with probed durations)
+let folderLabel = "";
 
 function clipsFromFiles(files) {
   const isVid = f => f.type.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(f.name);
@@ -805,14 +813,56 @@ async function clipsFromDir(dir) {
   }));
 }
 
-function setClips(clips, folderLabel) {
-  sessionClips = clips || [];
+// Clip duration via the matching SRT's last cue end (fast, no video decode needed).
+async function probeDurations(clips) {
+  const limit = 8;
+  for (let i = 0; i < clips.length; i += limit) {
+    await Promise.all(clips.slice(i, i + limit).map(async c => {
+      if (c.dur !== undefined) return;
+      try {
+        const f = await c.getSrt();
+        if (f) { const cues = parseSrt(await f.text()); c.dur = cues.length ? cues[cues.length - 1].end / 1000 : null; }
+        else c.dur = null;
+      } catch (e) { c.dur = null; }
+    }));
+  }
+}
+
+function minClipSec() { const v = parseFloat($('minDur').value); return isNaN(v) ? 0 : Math.max(0, v); }
+
+function applyClipFilter(autoload) {
+  const min = minClipSec();
+  const keepName = currentName;
+  sessionClips = allClips.filter(c => c.dur == null || c.dur >= min);
   const sel = $('clipSel');
   sel.innerHTML = '';
-  sessionClips.forEach((c, i) => { const o = document.createElement('option'); o.value = i; o.textContent = c.name; sel.appendChild(o); });
-  if (sessionClips.length > 1) sel.classList.remove('hidden'); else sel.classList.add('hidden');
-  if (folderLabel) $('srtStatus').textContent = `folder: ${folderLabel} · ${sessionClips.length} clip${sessionClips.length === 1 ? '' : 's'}`;
+  sessionClips.forEach((c, i) => {
+    const o = document.createElement('option'); o.value = i;
+    o.textContent = c.name + (c.dur != null ? `  (${c.dur < 60 ? c.dur.toFixed(1) + 's' : fmtClock(c.dur)})` : '');
+    sel.appendChild(o);
+  });
+  sel.classList.toggle('hidden', sessionClips.length <= 1);
+  $('clipFilter').classList.toggle('hidden', allClips.length <= 1);
+  const hidden = allClips.length - sessionClips.length;
+  $('srtStatus').textContent = `${folderLabel ? folderLabel + ' · ' : ''}${sessionClips.length}/${allClips.length} clip${allClips.length === 1 ? '' : 's'}${hidden > 0 ? ` · ${hidden} short hidden` : ''}`;
+
+  if (!sessionClips.length) return;
+  const keepIdx = sessionClips.findIndex(c => c.name === keepName);
+  if (keepIdx >= 0) { sel.value = String(keepIdx); }
+  else if (autoload) { loadClip(0); }
 }
+
+async function setClips(clips, label, autoload) {
+  allClips = clips || [];
+  folderLabel = label || "";
+  if (!allClips.length) return;
+  $('srtStatus').textContent = `${folderLabel ? folderLabel + ' · ' : ''}scanning ${allClips.length} clips…`;
+  await probeDurations(allClips);
+  applyClipFilter(autoload !== false);
+}
+
+$('minDur').addEventListener('change', () => { if (allClips.length) applyClipFilter(false); });
+$('minDur').addEventListener('input', () => { if (allClips.length) applyClipFilter(false); });
 
 function clearSrtState(msg) {
   srtCues = null;
@@ -841,8 +891,7 @@ async function handleFolder(files) {
   const clips = clipsFromFiles(files);
   if (!clips.length) { showErr("No .mp4 / .mov recordings found in that folder."); return; }
   const label = files[0] && files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : null;
-  setClips(clips, label);
-  await loadClip(0);
+  await setClips(clips, label);
 }
 
 /* ---- File System Access: remember a folder handle across sessions ---- */
@@ -903,7 +952,7 @@ async function refreshClipsFromLinked(interactive) {
   if (!(await ensureDirPermission(linkedDir, interactive))) return false;
   try {
     const clips = await clipsFromDir(linkedDir);
-    if (clips.length) { setClips(clips, linkedDir.name); return true; }
+    if (clips.length) { await setClips(clips, linkedDir.name, !stage.classList.contains('on')); return true; }
   } catch (e) {}
   return false;
 }
@@ -914,8 +963,7 @@ if (HAS_FSA) {
     try {
       const dir = await window.showDirectoryPicker({ id: 'artlynk', mode: 'read' });
       linkedDir = dir; await fsStore(dir); setLinkLabel();
-      const built = await refreshClipsFromLinked(true);
-      if (built && !stage.classList.contains('on')) await loadClip(0);
+      await refreshClipsFromLinked(true);
     } catch (e) { /* user dismissed */ }
   });
   fsLoad().then(h => { if (h) { linkedDir = h; setLinkLabel(); } });
@@ -931,7 +979,8 @@ async function handleFiles(files) {
 
   if (vFile) {
     // A manually loaded single video isn't part of a folder browse session.
-    $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = [];
+    $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = '';
+    $('clipFilter').classList.add('hidden'); sessionClips = []; allClips = [];
     // Auto-find the matching SRT: prefer one whose name matches the video, else the only one present.
     let sFile = srts.find(s => baseName(s.name) === baseName(vFile.name))
              || (srts.length === 1 ? srts[0] : null);
@@ -1508,7 +1557,7 @@ function sizeOneGraph(cv) {
 }
 function sizeGraphs() { sizeOneGraph($('brGraph')); sizeOneGraph($('distGraph')); }
 
-// Draw a single series, revealing only the portion up to `ms` (fills in as it plays).
+// Draw a single series with axes, revealing only the portion up to `ms`.
 function drawSeries(cv, series, maxV, ms, opts) {
   if (!cv) return;
   const ctx = cv.getContext('2d');
@@ -1520,28 +1569,45 @@ function drawSeries(cv, series, maxV, ms, opts) {
     if (opts.nowEl) $(opts.nowEl).textContent = "—";
     return;
   }
-  const pad = 6, gw = w, gh = h - pad * 2;
-  const X = t => (t / durMs) * gw;
-  const Y = v => pad + gh - (Math.max(0, v) / maxV) * gh;
+  const mL = 44, mR = 10, mT = 6, mB = 16;
+  const gw = w - mL - mR, gh = h - mT - mB;
+  const X = t => mL + (Math.max(0, Math.min(durMs, t)) / durMs) * gw;
+  const Y = v => mT + gh - (Math.max(0, v) / maxV) * gh;
 
-  // baseline gridlines (full width — shows where the trace is heading)
-  ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
-  for (let i = 0; i <= 2; i++) { const y = pad + (gh / 2) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(gw, y); ctx.stroke(); }
+  // axes frame + horizontal gridlines with Y labels
+  ctx.font = "10px monospace"; ctx.textBaseline = "middle"; ctx.textAlign = "right";
+  ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.fillStyle = "rgba(160,170,185,.7)"; ctx.lineWidth = 1;
+  for (let i = 0; i <= 2; i++) {
+    const frac = i / 2, val = maxV * (1 - frac), y = mT + gh * frac;
+    ctx.beginPath(); ctx.moveTo(mL, y); ctx.lineTo(mL + gw, y); ctx.stroke();
+    const lbl = i === 0 ? `${opts.yfmt(val)}${opts.unit}` : opts.yfmt(val);
+    ctx.fillText(lbl, mL - 6, y);
+  }
+  // X axis time ticks
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let i = 0; i <= 4; i++) {
+    const frac = i / 4, x = mL + gw * frac, t = (durMs / 1000) * frac;
+    ctx.fillStyle = "rgba(160,170,185,.7)";
+    const lbl = fmtClock(t);
+    ctx.textAlign = i === 0 ? "left" : (i === 4 ? "right" : "center");
+    ctx.fillText(lbl, x, mT + gh + 4);
+    ctx.strokeStyle = "rgba(255,255,255,.05)"; ctx.beginPath(); ctx.moveTo(x, mT); ctx.lineTo(x, mT + gh); ctx.stroke();
+  }
 
-  // points revealed so far (up to playhead), plus an interpolated head point at exactly ms
+  // revealed points up to playhead + interpolated head
   const head = Math.max(0, Math.min(durMs, ms));
   const shown = series.filter(p => p.t <= head);
   if (!shown.length) shown.push(series[0]);
   const pts = shown.map(p => ({ x: X(p.t), y: Y(p.v) }));
   const headX = X(head);
-  let curV = shown[shown.length - 1].v;
+  const curV = shown[shown.length - 1].v;
   pts.push({ x: headX, y: Y(curV) });
 
-  // filled area under the revealed portion
+  // filled area
   ctx.beginPath();
   pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-  ctx.lineTo(headX, pad + gh); ctx.lineTo(pts[0].x, pad + gh); ctx.closePath();
-  const grad = ctx.createLinearGradient(0, pad, 0, pad + gh);
+  ctx.lineTo(headX, mT + gh); ctx.lineTo(pts[0].x, mT + gh); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, mT, 0, mT + gh);
   grad.addColorStop(0, opts.fill0); grad.addColorStop(1, opts.fill1);
   ctx.fillStyle = grad; ctx.fill();
 
@@ -1550,10 +1616,10 @@ function drawSeries(cv, series, maxV, ms, opts) {
   pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
   ctx.strokeStyle = opts.color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
 
-  // playhead marker
+  // playhead
   ctx.fillStyle = opts.color; ctx.beginPath(); ctx.arc(headX, Y(curV), 3, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(headX, 0); ctx.lineTo(headX, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(headX, mT); ctx.lineTo(headX, mT + gh); ctx.stroke();
 
   if (opts.nowEl) $(opts.nowEl).textContent = opts.fmt(curV);
 }
@@ -1563,11 +1629,13 @@ function drawGraphs(ms) {
   if (!wrap || wrap.classList.contains('hidden')) return;
   drawSeries($('brGraph'), bitrateSeries, bitrateMax, ms, {
     color: "#5aaaff", fill0: "rgba(90,170,255,.28)", fill1: "rgba(90,170,255,0)",
-    nowEl: 'brNow', empty: "no bitrate data in SRT", fmt: v => `${v} Mbps`
+    nowEl: 'brNow', empty: "no bitrate data in SRT", unit: " Mb",
+    yfmt: v => `${Math.round(v)}`, fmt: v => `${v} Mbps`
   });
   drawSeries($('distGraph'), distSeries, distMax, ms, {
     color: "#36d39b", fill0: "rgba(54,211,155,.28)", fill1: "rgba(54,211,155,0)",
-    nowEl: 'distNow', empty: "no distance data in SRT", fmt: v => `${Math.round(v)} m`
+    nowEl: 'distNow', empty: "no distance data in SRT", unit: " m",
+    yfmt: v => `${Math.round(v)}`, fmt: v => `${Math.round(v)} m`
   });
 }
 
@@ -1718,7 +1786,8 @@ $('newBtn').onclick = () => {
   video.pause(); video.removeAttribute('src'); video.load();
   stage.classList.remove('on'); drop.classList.remove('hidden');
   fileIn.value = ''; $('srtFile').value = ''; $('folderFile').value = ''; $('osdBtn').disabled = true;
-  $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = [];
+  $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = []; allClips = [];
+  $('clipFilter').classList.add('hidden');
   bitrateSeries = []; distSeries = []; $('brWrap').classList.add('hidden'); $('brBtn').classList.remove('active');
   $('dlLink').classList.add('hidden');
   const sub = $('subShow'); sub.checked = false; sub.disabled = true;
