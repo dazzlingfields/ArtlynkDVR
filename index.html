@@ -187,11 +187,11 @@
     <span class="priv">Local Sandbox Security</span>
   </header>
 
-  <div id="drop" class="drop" tabindex="0" role="button" aria-label="Select or drop high-definition media file targets">
+  <label id="drop" for="file" class="drop" tabindex="0" role="button" aria-label="Select or drop high-definition media file targets">
     <div class="reticle"></div>
     <div class="big">Load ArtLynk recording (.mp4)</div>
     <div class="sub">Select or drag standard telemetry logs or pairs together. All calculations execute isolated locally inside the browser environment.</div>
-  </div>
+  </label>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div id="err" class="err"></div>
   <div id="banner" class="banner hidden"></div>
@@ -738,9 +738,11 @@ $('toggleTechDataBtn').addEventListener('click', () => {
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('hot'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('hot'));
 drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('hot'); handleFiles([...e.dataTransfer.files]); });
-drop.addEventListener('click', () => fileIn.click());
+// The drop zone is a <label for="file">, so a plain click natively opens the
+// picker (works inside sandboxed iframes). We only forward keyboard activation.
 fileIn.addEventListener('change', () => { if (fileIn.files.length) handleFiles([...fileIn.files]); });
-window.addEventListener('keydown', e => { if (e.target === drop && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); fileIn.click(); } });
+fileIn.addEventListener('click', e => e.stopPropagation());
+drop.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); fileIn.click(); } });
 
 async function handleFiles(files) {
   let vFile = files.find(f => f.type.startsWith('video/') || f.name.toLowerCase().endsWith('.mp4') || f.name.toLowerCase().endsWith('.mov'));
