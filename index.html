@@ -198,6 +198,7 @@
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div class="drop-alt">
     <button class="btn" id="folderBtn" type="button">Scan a folder for clips</button>
+    <button class="btn hidden" id="linkBtn" type="button">Link folder for auto-SRT</button>
     <span class="drop-alt-note">Point at your SD-card folder — each <b>.mp4</b> is auto-paired with its matching <b>.srt</b></span>
   </div>
   <input id="folderFile" type="file" webkitdirectory directory class="hidden" />
@@ -774,6 +775,73 @@ async function handleFolder(files) {
   await handleVideo(v);
 }
 
+/* ---- File System Access: remember a folder, then read only the sibling .srt ---- */
+const HAS_FSA = (typeof window !== 'undefined') && ('showDirectoryPicker' in window);
+let linkedDir = null;                       // FileSystemDirectoryHandle
+const FS_DB = 'artlynk-fs', FS_STORE = 'handles', FS_KEY = 'dir';
+
+function fsIdb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(FS_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(FS_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function fsStore(handle) {
+  try { const db = await fsIdb(); await new Promise((res, rej) => { const t = db.transaction(FS_STORE, 'readwrite'); t.objectStore(FS_STORE).put(handle, FS_KEY); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) {}
+}
+async function fsLoad() {
+  try { const db = await fsIdb(); return await new Promise(res => { const t = db.transaction(FS_STORE, 'readonly'); const q = t.objectStore(FS_STORE).get(FS_KEY); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (e) { return null; }
+}
+function fileStem(name) { return (name || '').replace(/\.[^.]+$/, ''); }   // case-preserved
+
+async function ensureDirPermission(dir, interactive) {
+  if (!dir) return false;
+  const opts = { mode: 'read' };
+  try {
+    if ((await dir.queryPermission(opts)) === 'granted') return true;
+    if (!interactive) return false;
+    return (await dir.requestPermission(opts)) === 'granted';
+  } catch (e) { return false; }
+}
+
+function setLinkLabel() {
+  if (!HAS_FSA) return;
+  $('linkBtn').textContent = linkedDir ? `Folder linked: ${linkedDir.name}` : 'Link folder for auto-SRT';
+}
+
+// Read ONLY <videostem>.srt from the linked folder — no enumeration of other files.
+async function tryLinkedSrt(videoName, interactive) {
+  if (!linkedDir) return false;
+  if (!(await ensureDirPermission(linkedDir, interactive))) return false;
+  const stem = fileStem(videoName);
+  for (const candidate of [`${stem}.srt`, `${stem}.SRT`]) {
+    try {
+      const fh = await linkedDir.getFileHandle(candidate);   // throws if absent — no listing
+      const file = await fh.getFile();
+      handleSrt(file, true);
+      return true;
+    } catch (e) { /* try next candidate */ }
+  }
+  return false;
+}
+
+if (HAS_FSA) {
+  $('linkBtn').classList.remove('hidden');
+  $('linkBtn').addEventListener('click', async () => {
+    try {
+      const dir = await window.showDirectoryPicker({ id: 'artlynk', mode: 'read' });
+      linkedDir = dir; await fsStore(dir); setLinkLabel();
+      $('srtStatus').textContent = `auto-SRT folder linked: ${dir.name}`;
+      // If a clip is already loaded without telemetry, fill it in now.
+      if (currentName && (!srtCues || !srtCues.length)) await tryLinkedSrt(currentName, true);
+    } catch (e) { /* user dismissed picker */ }
+  });
+  // Restore a previously linked folder (permission is re-confirmed lazily on first use).
+  fsLoad().then(h => { if (h) { linkedDir = h; setLinkLabel(); } });
+}
+
 function baseName(name) { return (name || "").replace(/\.[^.]+$/, "").toLowerCase(); }
 
 async function handleFiles(files) {
@@ -787,8 +855,12 @@ async function handleFiles(files) {
     let sFile = srts.find(s => baseName(s.name) === baseName(vFile.name))
              || (srts.length === 1 ? srts[0] : null);
     if (sFile) handleSrt(sFile, true);
-    else $('srtStatus').textContent = "no matching .srt — drop it together with the video, or use Import SRT Log";
     await handleVideo(vFile);
+    if (!sFile) {
+      // No SRT alongside — read just the sibling from a linked folder if we have one.
+      const got = await tryLinkedSrt(vFile.name, true);
+      if (!got) $('srtStatus').textContent = "no matching .srt — drop it with the video, link a folder, or Import SRT Log";
+    }
   } else if (srts.length) {
     handleSrt(srts[0], false);
   } else {
@@ -1093,7 +1165,9 @@ class OsdFont {
   }
 }
 
-// Convert a white-on-black font sheet into a transparent, near-white glyph sheet.
+// Key the black background to transparent while preserving each glyph's native
+// colour (Betaflight symbols are amber/red/green, not just white). Alpha comes from
+// the brightest channel so a saturated amber pixel stays fully opaque amber.
 function keyOutBlack(img) {
   const c = document.createElement('canvas');
   c.width = img.width; c.height = img.height;
@@ -1104,11 +1178,9 @@ function keyOutBlack(img) {
   catch (e) { return c; }   // cross-origin without CORS -> leave as-is rather than throw
   const d = id.data;
   for (let i = 0; i < d.length; i += 4) {
-    const lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
-    // Soft luminance->alpha curve: pure black transparent, glyph body fully opaque.
-    let a = lum < 10 ? 0 : Math.min(255, Math.round(Math.pow(lum / 255, 0.55) * 255));
-    if (a > 0) { d[i] = 236; d[i+1] = 242; d[i+2] = 250; }  // unify to clean OSD white
-    d[i+3] = a;
+    const v = Math.max(d[i], d[i + 1], d[i + 2]);   // HSV value: bright in any hue
+    d[i + 3] = v < 10 ? 0 : Math.min(255, Math.round(Math.pow(v / 255, 0.55) * 255));
+    // RGB left untouched so colour is preserved.
   }
   x.putImageData(id, 0, 0);
   return c;
