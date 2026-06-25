@@ -43,6 +43,9 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
   .drop:hover, .drop.hot { border-color: var(--link); background: #141c24; }
+  .drop-alt { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+  .drop-alt-note { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .drop-alt-note b { color: var(--muted); font-weight: 600; }
   .drop .big { font-family: var(--mono); font-size: 16px; letter-spacing: .05em; text-transform: uppercase; }
   .drop .sub { color: var(--muted); font-size: 13px; margin-top: 10px; max-width: 440px; }
   .drop .reticle { width: 40px; height: 40px; margin-bottom: 20px; position: relative; opacity: .7; }
@@ -193,6 +196,11 @@
     <div class="sub">Select or drag standard telemetry logs or pairs together. All calculations execute isolated locally inside the browser environment.</div>
   </label>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
+  <div class="drop-alt">
+    <button class="btn" id="folderBtn" type="button">Scan a folder for clips</button>
+    <span class="drop-alt-note">Point at your SD-card folder — each <b>.mp4</b> is auto-paired with its matching <b>.srt</b></span>
+  </div>
+  <input id="folderFile" type="file" webkitdirectory directory class="hidden" />
   <div id="err" class="err"></div>
   <div id="banner" class="banner hidden"></div>
 
@@ -744,6 +752,28 @@ fileIn.addEventListener('change', () => { if (fileIn.files.length) handleFiles([
 fileIn.addEventListener('click', e => e.stopPropagation());
 drop.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); fileIn.click(); } });
 
+// Folder scan (webkitdirectory): true auto-find — pick the SD-card folder, pair by basename.
+$('folderBtn').addEventListener('click', () => $('folderFile').click());
+$('folderFile').addEventListener('change', () => { if ($('folderFile').files.length) handleFolder([...$('folderFile').files]); });
+
+async function handleFolder(files) {
+  const isVid = f => f.type.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(f.name);
+  const isSrt = f => /\.srt$/i.test(f.name);
+  const vids = files.filter(isVid).sort((a, b) => a.name.localeCompare(b.name));
+  const srts = files.filter(isSrt);
+  if (!vids.length) { showErr("No .mp4 / .mov recordings found in that folder."); return; }
+
+  const v = vids[0];
+  const s = srts.find(x => baseName(x.name) === baseName(v.name)) || (srts.length === 1 ? srts[0] : null);
+  if (vids.length > 1) {
+    $('banner').innerHTML = `<b>Folder scan:</b> ${vids.length} clips found — loaded <b>${v.name}</b> (first by name). Re-scan and the picker remembers the folder.`;
+    $('banner').classList.remove('hidden');
+  }
+  if (s) handleSrt(s, true);
+  else $('srtStatus').textContent = `no .srt matching ${v.name} in folder`;
+  await handleVideo(v);
+}
+
 function baseName(name) { return (name || "").replace(/\.[^.]+$/, "").toLowerCase(); }
 
 async function handleFiles(files) {
@@ -1036,21 +1066,52 @@ function decodeOsd(rawPackets) {
 }
 
 /* Dynamic Font Texture Scaling System */
+// Betaflight/Walksnail OSD fonts are a single vertical column of glyphs.
+// Each cell is `cellW` wide and `cellH` tall; pages (colour variants) share glyph
+// shapes, so we render the base page and mask the index to the glyph count.
 class OsdFont {
   constructor(img) {
-    this.img = img; this.w = img.width; this.h = img.height;
-    this.cols = 16; this.rows = 16;
-    if (this.w === 512) { this.cols = 16; this.rows = 16; }
-    else if (this.w === 256) { this.cols = 16; this.rows = 32; }
-    else if (this.w === 1024) { this.cols = 32; this.rows = 16; }
-    this.sw = this.w / this.cols; this.sh = this.h / this.rows;
+    const w = img.width, h = img.height;
+    // Pick the glyph count whose resulting cell matches the ~1.5 (h:w) Betaflight aspect.
+    const target = w * 1.5;
+    let best = 256, bestErr = Infinity;
+    for (const cnt of [256, 512]) {
+      const e = Math.abs(h / cnt - target);
+      if (e < bestErr) { bestErr = e; best = cnt; }
+    }
+    this.count = best;
+    this.cw = w;
+    this.ch = h / best;
+    this.canvas = keyOutBlack(img);   // black background -> transparent, glyphs -> crisp white
+    this.img = this.canvas;
+    this.label = `${w}×${h}px · ${best} glyphs`;
   }
   rect(idx) {
-    let charIdx = idx & 0xFFF;
-    if (charIdx >= this.cols * this.rows) return null;
-    let c = charIdx % this.cols, r = Math.floor(charIdx / this.cols);
-    return { sx: c * this.sw, sy: r * this.sh, sw: this.sw, sh: this.sh };
+    const ci = idx & (this.count - 1);   // low bits = glyph within the (shared) colour page
+    if (ci >= this.count) return null;
+    return { sx: 0, sy: ci * this.ch, sw: this.cw, sh: this.ch };
   }
+}
+
+// Convert a white-on-black font sheet into a transparent, near-white glyph sheet.
+function keyOutBlack(img) {
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const x = c.getContext('2d');
+  x.drawImage(img, 0, 0);
+  let id;
+  try { id = x.getImageData(0, 0, c.width, c.height); }
+  catch (e) { return c; }   // cross-origin without CORS -> leave as-is rather than throw
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+    // Soft luminance->alpha curve: pure black transparent, glyph body fully opaque.
+    let a = lum < 10 ? 0 : Math.min(255, Math.round(Math.pow(lum / 255, 0.55) * 255));
+    if (a > 0) { d[i] = 236; d[i+1] = 242; d[i+2] = 250; }  // unify to clean OSD white
+    d[i+3] = a;
+  }
+  x.putImageData(id, 0, 0);
+  return c;
 }
 
 function activeFont() { return customFont || baseFont; }
@@ -1060,10 +1121,10 @@ async function tryDefaultFont(w, h) {
   try {
     let img = await loadImgUrl(target);
     baseFont = new OsdFont(img);
-    $('fontStatus').innerHTML = `Auto-configured grid textures via <b>${target}</b>`;
+    $('fontStatus').innerHTML = `Loaded <b>${target}</b> (${baseFont.label}) for ${h > 800 ? "1080p" : "720p"}`;
   } catch(e) {
     baseFont = null;
-    $('fontStatus').innerHTML = `Text fallback active — <b>Import a Betaflight OSD font PNG</b> for full glyph/symbol rendering`;
+    $('fontStatus').innerHTML = `Text fallback active — place <b>${target}</b> beside index.html, or Import a font PNG`;
   }
 }
 
@@ -1082,7 +1143,7 @@ $('fontFile').onchange = () => {
     let i = new Image();
     i.onload = () => {
       customFont = new OsdFont(i);
-      $('fontStatus').innerHTML = `User override matrix activated: <b>${f.name}</b>`;
+      $('fontStatus').innerHTML = `Custom font: <b>${f.name}</b> (${customFont.label})`;
       draw();
     };
     i.src = fr.result;
@@ -1255,12 +1316,17 @@ function paintOsd(c, W, H, frame) {
   
   const af = activeFont();
   if (af) {
+    c.imageSmoothingEnabled = true;
+    c.shadowColor = "rgba(0,0,0,0.85)";
+    c.shadowBlur = Math.max(1, cellH * 0.06);
+    c.shadowOffsetX = 0; c.shadowOffsetY = 0;
     for (const g of frame.glyphs) {
       const r = af.rect(g.idx); if (!r) continue;
       const dw = cellW * scale, dh = cellH * scale;
       const dx = g.c * cellW + ox - (dw - cellW) / 2, dy = g.r * cellH + oy - (dh - cellH) / 2;
       c.drawImage(af.img, r.sx, r.sy, r.sw, r.sh, dx, dy, dw, dh);
     }
+    c.shadowBlur = 0;
   } else {
     // Text fallback when no font PNG is loaded: render readable ASCII glyphs,
     // map a few common Betaflight symbols, and skip the rest rather than drawing noise.
@@ -1372,11 +1438,12 @@ $('newBtn').onclick = () => {
   cancelAnimationFrame(raf); decoded = null; srtCues = null; srcBuf = null;
   video.pause(); video.removeAttribute('src'); video.load();
   stage.classList.remove('on'); drop.classList.remove('hidden');
-  fileIn.value = ''; $('srtFile').value = ''; $('osdBtn').disabled = true;
+  fileIn.value = ''; $('srtFile').value = ''; $('folderFile').value = ''; $('osdBtn').disabled = true;
   $('dlLink').classList.add('hidden');
   const sub = $('subShow'); sub.checked = false; sub.disabled = true;
   $('srtStatus').textContent = "none detected";
   $('subbar').classList.remove('on'); $('strip').classList.remove('on');
+  if (!EMBEDDED) $('banner').classList.add('hidden');
   $('exportProg').classList.remove('on');
   durMs = 0; clearErr();
 };
