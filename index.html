@@ -255,10 +255,6 @@
         <div class="tv" id="t_sbat">—</div><div class="tl">Craft Batt</div>
       </div>
       <div class="tcell">
-        <div class="ticon"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="9" rx="3"/><path d="M7 15l-1 3M17 15l1 3"/><circle cx="8" cy="10.5" r="1.6"/><circle cx="16" cy="10.5" r="1.6"/></svg></div>
-        <div class="tv" id="t_gbat">—</div><div class="tl">Goggle Batt</div>
-      </div>
-      <div class="tcell">
         <div class="ticon"><svg viewBox="0 0 24 24"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg></div>
         <div class="tv" id="t_bitrate">—</div><div class="tl">Bitrate</div>
       </div>
@@ -266,18 +262,17 @@
         <div class="ticon"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></div>
         <div class="tv" id="t_distance">—</div><div class="tl">Distance</div>
       </div>
-      <div class="tcell">
-        <div class="ticon"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg></div>
-        <div class="tv" id="t_mode">—</div><div class="tl">Mode</div>
-      </div>
     </div>
 
     <div id="brWrap" class="brwrap hidden">
-      <div class="brhead">
-        <span class="brtitle">Link Bitrate</span>
-        <span id="brNow" class="brnow">—</span>
+      <div class="graphrow">
+        <div class="brhead"><span class="brtitle">Link Bitrate</span><span id="brNow" class="brnow">—</span></div>
+        <canvas id="brGraph" class="brgraph"></canvas>
       </div>
-      <canvas id="brGraph" class="brgraph"></canvas>
+      <div class="graphrow" style="margin-top:10px;">
+        <div class="brhead"><span class="brtitle">Distance</span><span id="distNow" class="brnow">—</span></div>
+        <canvas id="distGraph" class="brgraph"></canvas>
+      </div>
     </div>
 
     <div class="hud-controls">
@@ -291,7 +286,7 @@
 
           <button class="btn" id="brBtn" style="margin-left: 12px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg>
-            Bitrate graph
+            Telemetry graphs
           </button>
         </div>
         
@@ -1350,10 +1345,8 @@ function parseTelemetry(t) {
     ch:       g(/CH:\s*(\d+)/i),
     ft:       g(/FlightTime:\s*(\d+)/i),
     sbat:     g(/SBat:\s*([\d.]+)/i),
-    gbat:     g(/GBat:\s*([\d.]+)/i),
     bitrate:  g(/Bitrate:\s*([0-9]+\s*[A-Za-z/]*)/i),
     distance: g(/Distance:\s*(\d+)\s*m/i),
-    sty:      g(/STYMode:\s*(\d+)/i),
     airtemp:  g(/AirTemp:\s*([\d.]+)/i),
     gndtemp:  g(/GndTemp:\s*([\d.]+)/i)
   };
@@ -1401,7 +1394,6 @@ function updateStrip(ms) {
 
   $('t_ch').textContent       = f.ch       != null ? f.ch                       : "—";
   $('t_sbat').textContent     = f.sbat     != null ? f.sbat + "V"               : "—";
-  $('t_gbat').textContent     = f.gbat     != null ? f.gbat + "V"               : "—";
   $('t_bitrate').textContent  = f.bitrate  != null ? f.bitrate.replace(/\s+/g,'') : "—";
   $('t_distance').textContent = f.distance != null ? f.distance + "m"           : "—";
   $('t_ft').textContent       = f.ft       != null ? fmtClock(+f.ft)            : "—";
@@ -1410,8 +1402,6 @@ function updateStrip(ms) {
   $('t_signal').textContent = sig != null ? `${sig}/4` : "—";
   const bars = $('sigbars').children;
   for (let i = 0; i < 4; i++) bars[i].classList.toggle('on', sig != null && sig > i);
-
-  $('t_mode').textContent = f.sty != null ? `STY ${f.sty}` : "—";
 }
 
 function frameAt(ms) {
@@ -1489,72 +1479,96 @@ function paint(msArg) {
     $('subbar').classList.remove('on');
   }
 
-  drawBitrateGraph(ms);
+  drawGraphs(ms);
 }
 
-/* ---- Bitrate graph (sourced from the SRT, tracks the playhead) ---- */
+/* ---- Telemetry graphs (bitrate + distance), revealed progressively as the video plays ---- */
 let bitrateSeries = [], bitrateMax = 20;
+let distSeries = [], distMax = 50;
 
 function buildBitrateSeries(cues) {
-  bitrateSeries = [];
+  bitrateSeries = []; distSeries = [];
   for (const c of cues) {
-    const m = (c.fields && c.fields.bitrate) ? c.fields.bitrate.match(/([\d.]+)/) : null;
-    if (m) bitrateSeries.push({ t: c.start, v: parseFloat(m[1]) });
+    const f = c.fields || {};
+    const bm = f.bitrate ? f.bitrate.match(/([\d.]+)/) : null;
+    if (bm) bitrateSeries.push({ t: c.start, v: parseFloat(bm[1]) });
+    if (f.distance != null) distSeries.push({ t: c.start, v: parseFloat(f.distance) });
   }
   bitrateMax = Math.max(10, ...bitrateSeries.map(p => p.v));
-  if ($('brBtn')) $('brBtn').classList.toggle('active', !$('brWrap').classList.contains('hidden'));
+  distMax = Math.max(10, ...distSeries.map(p => p.v));
 }
 
-function sizeGraph() {
-  const cv = $('brGraph'); if (!cv) return;
+function sizeOneGraph(cv) {
+  if (!cv) return;
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 800, h = cv.clientHeight || 84;
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cv.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
   cv._w = w; cv._h = h;
 }
+function sizeGraphs() { sizeOneGraph($('brGraph')); sizeOneGraph($('distGraph')); }
 
-function drawBitrateGraph(ms) {
-  const wrap = $('brWrap');
-  if (!wrap || wrap.classList.contains('hidden')) return;
-  const cv = $('brGraph'); const ctx = cv.getContext('2d');
+// Draw a single series, revealing only the portion up to `ms` (fills in as it plays).
+function drawSeries(cv, series, maxV, ms, opts) {
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
   const w = cv._w || cv.clientWidth, h = cv._h || cv.clientHeight;
   ctx.clearRect(0, 0, w, h);
-  if (!bitrateSeries.length || !durMs) {
+  if (!series.length || !durMs) {
     ctx.fillStyle = "rgba(150,160,175,.6)"; ctx.font = "12px monospace"; ctx.textBaseline = "middle";
-    ctx.fillText("no bitrate data in SRT", 10, h / 2); $('brNow').textContent = "—"; return;
+    ctx.fillText(opts.empty, 10, h / 2);
+    if (opts.nowEl) $(opts.nowEl).textContent = "—";
+    return;
   }
   const pad = 6, gw = w, gh = h - pad * 2;
   const X = t => (t / durMs) * gw;
-  const Y = v => pad + gh - (v / bitrateMax) * gh;
+  const Y = v => pad + gh - (Math.max(0, v) / maxV) * gh;
 
-  // gridlines
+  // baseline gridlines (full width — shows where the trace is heading)
   ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
   for (let i = 0; i <= 2; i++) { const y = pad + (gh / 2) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(gw, y); ctx.stroke(); }
 
-  // area + line
+  // points revealed so far (up to playhead), plus an interpolated head point at exactly ms
+  const head = Math.max(0, Math.min(durMs, ms));
+  const shown = series.filter(p => p.t <= head);
+  if (!shown.length) shown.push(series[0]);
+  const pts = shown.map(p => ({ x: X(p.t), y: Y(p.v) }));
+  const headX = X(head);
+  let curV = shown[shown.length - 1].v;
+  pts.push({ x: headX, y: Y(curV) });
+
+  // filled area under the revealed portion
   ctx.beginPath();
-  bitrateSeries.forEach((p, i) => { const x = X(p.t), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-  const lastX = X(bitrateSeries[bitrateSeries.length - 1].t);
-  ctx.lineTo(lastX, pad + gh); ctx.lineTo(X(bitrateSeries[0].t), pad + gh); ctx.closePath();
+  pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+  ctx.lineTo(headX, pad + gh); ctx.lineTo(pts[0].x, pad + gh); ctx.closePath();
   const grad = ctx.createLinearGradient(0, pad, 0, pad + gh);
-  grad.addColorStop(0, "rgba(90,170,255,.28)"); grad.addColorStop(1, "rgba(90,170,255,0)");
+  grad.addColorStop(0, opts.fill0); grad.addColorStop(1, opts.fill1);
   ctx.fillStyle = grad; ctx.fill();
 
+  // revealed line
   ctx.beginPath();
-  bitrateSeries.forEach((p, i) => { const x = X(p.t), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-  ctx.strokeStyle = "#5aaaff"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+  pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+  ctx.strokeStyle = opts.color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
 
-  // playhead
-  const px = Math.min(gw, Math.max(0, X(ms)));
-  ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  // playhead marker
+  ctx.fillStyle = opts.color; ctx.beginPath(); ctx.arc(headX, Y(curV), 3, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(headX, 0); ctx.lineTo(headX, h); ctx.stroke();
 
-  // current value (nearest sample at/just before ms)
-  let cur = bitrateSeries[0];
-  for (const p of bitrateSeries) { if (p.t <= ms) cur = p; else break; }
-  $('brNow').textContent = `${cur.v} Mbps`;
-  ctx.fillStyle = "#5aaaff"; ctx.beginPath(); ctx.arc(px, Y(cur.v), 3, 0, Math.PI * 2); ctx.fill();
+  if (opts.nowEl) $(opts.nowEl).textContent = opts.fmt(curV);
+}
+
+function drawGraphs(ms) {
+  const wrap = $('brWrap');
+  if (!wrap || wrap.classList.contains('hidden')) return;
+  drawSeries($('brGraph'), bitrateSeries, bitrateMax, ms, {
+    color: "#5aaaff", fill0: "rgba(90,170,255,.28)", fill1: "rgba(90,170,255,0)",
+    nowEl: 'brNow', empty: "no bitrate data in SRT", fmt: v => `${v} Mbps`
+  });
+  drawSeries($('distGraph'), distSeries, distMax, ms, {
+    color: "#36d39b", fill0: "rgba(54,211,155,.28)", fill1: "rgba(54,211,155,0)",
+    nowEl: 'distNow', empty: "no distance data in SRT", fmt: v => `${Math.round(v)} m`
+  });
 }
 
 $('brBtn').addEventListener('click', () => {
@@ -1562,10 +1576,10 @@ $('brBtn').addEventListener('click', () => {
   const show = wrap.classList.contains('hidden');
   wrap.classList.toggle('hidden', !show);
   $('brBtn').classList.toggle('active', show);
-  if (show) { sizeGraph(); drawBitrateGraph(video.currentTime * 1000); }
+  if (show) { sizeGraphs(); drawGraphs(video.currentTime * 1000); }
 });
 window.addEventListener('resize', () => {
-  if (!$('brWrap').classList.contains('hidden')) { sizeGraph(); drawBitrateGraph(video.currentTime * 1000); }
+  if (!$('brWrap').classList.contains('hidden')) { sizeGraphs(); drawGraphs(video.currentTime * 1000); }
 });
 
 /* ---- Quick "load another video" without resetting the workspace ---- */
@@ -1705,7 +1719,7 @@ $('newBtn').onclick = () => {
   stage.classList.remove('on'); drop.classList.remove('hidden');
   fileIn.value = ''; $('srtFile').value = ''; $('folderFile').value = ''; $('osdBtn').disabled = true;
   $('clipSel').classList.add('hidden'); $('clipSel').innerHTML = ''; sessionClips = [];
-  bitrateSeries = []; $('brWrap').classList.add('hidden'); $('brBtn').classList.remove('active');
+  bitrateSeries = []; distSeries = []; $('brWrap').classList.add('hidden'); $('brBtn').classList.remove('active');
   $('dlLink').classList.add('hidden');
   const sub = $('subShow'); sub.checked = false; sub.disabled = true;
   $('srtStatus').textContent = "none detected";
@@ -1724,27 +1738,8 @@ function setExporting(v) {
 }
 
 async function exportVideo() {
-  if (!decoded || !srcBuf) return;
+  if (!decoded || !video.src) { showErr("Load a recording before exporting."); return; }
   clearErr();
-  const inS = trimIn / 1000, outS = trimOut / 1000;
-  
-  if (typeof VideoEncoder !== 'undefined' && typeof MP4Muxer !== 'undefined') {
-    setExporting(true);
-    $('exportProg').classList.add('on');
-    $('exportLabel').textContent = "Baking Video Output Tracks (WebCodecs)...";
-    $('exportBar').style.width = "0%"; $('exportPct').textContent = "0%";
-    try {
-      const blob = await exportWebCodecs(inS, outS, frac => {
-        $('exportBar').style.width = (frac * 100) + "%";
-        $('exportPct').textContent = Math.round(frac * 100) + "%";
-      });
-      finishExport(blob, 'mp4');
-      return;
-    } catch(e) {
-      showErr("WebCodecs layout pipeline encoding fallback alert (" + e.message + "). Defaulting processing pathways.");
-      setExporting(false);
-    }
-  }
   await exportMediaRecorder();
 }
 $('exportBtn').onclick = exportVideo;
@@ -1754,6 +1749,7 @@ function finishExport(blob, ext) {
   const outName = baseStem(currentName) + "_burn." + ext;
   const { clicked } = downloadBlob(blob, outName, $('dlLink'));
   if (clicked) $('exportSub').textContent = `Master print target output processed successfully: ${outName}`;
+  try { paint(); } catch (e) {}
 }
 
 /* Framework Track Extraction & Composition Compiler Passes */
@@ -1832,10 +1828,11 @@ async function exportWebCodecs(inS, outS, onProg) {
 
 function paintSubCanvas(ctx, W, H, text) {
   ctx.save();
-  let fs = Math.clamp?.(14, W * 0.022, 24) || 20;
-  ctx.font = `${fs}px var(--mono), monospace`; ctx.fillStyle = "#ffffff";
-  ctx.textAlign = "center"; ctx.shadowColor = "#000000"; ctx.shadowBlur = 4;
-  ctx.fillText(text, W / 2, H * 0.94);
+  const fs = Math.max(14, Math.min(28, Math.round(W * 0.018)));
+  ctx.font = `${fs}px monospace`; ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = "#000000"; ctx.shadowBlur = 4;
+  ctx.fillText(text, W / 2, H * 0.95);
   ctx.restore();
 }
 
@@ -1929,60 +1926,83 @@ class MP4Demuxer {
   }
 }
 
-/* MediaRecorder Intermittent Legacy Track Fallback Engine */
+/* MediaRecorder burn: composite video + OSD (+ subtitles) to a canvas stream */
+function seekVideo(v, t) {
+  return new Promise(res => {
+    if (Math.abs(v.currentTime - t) < 0.01) { res(); return; }
+    const h = () => { v.removeEventListener('seeked', h); res(); };
+    v.addEventListener('seeked', h);
+    v.currentTime = t;
+  });
+}
+
 async function exportMediaRecorder() {
-  let W = video.videoWidth || 1280, H = video.videoHeight || 720;
+  const W = video.videoWidth || 1280, H = video.videoHeight || 720;
   const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
-  
+
+  // Pick the best container/codec this browser will record.
+  let mime = 'video/mp4;codecs=avc1.640029';
+  const tries = ['video/mp4;codecs=avc1.640029', 'video/mp4;codecs=avc1.4d002a', 'video/mp4',
+                 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  mime = tries.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } }) || '';
+
   const stream = canvas.captureStream(60);
-  let mime = 'video/mp4;codecs=avc1.4d002a';
-  if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp9';
-  if (!MediaRecorder.isTypeSupported(mime)) mime = '';
+  // Add the original audio track if the browser can expose it.
+  let audioAdded = false;
+  try {
+    const cap = video.captureStream ? video.captureStream() : (video.mozCaptureStream && video.mozCaptureStream());
+    if (cap) cap.getAudioTracks().forEach(t => { stream.addTrack(t); audioAdded = true; });
+  } catch (e) {}
 
   let rec;
   try {
-    rec = mime ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12000000 }) : new MediaRecorder(stream);
-  } catch(e) {
-    showErr("Unified capture layout context error initialization state: " + e.message); return;
-  }
+    rec = mime ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16_000_000 })
+               : new MediaRecorder(stream);
+  } catch (e) { showErr("MediaRecorder could not start: " + e.message); return; }
 
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   rec.onstop = () => {
-    video.muted = false; setExporting(false);
-    const ext = mime && mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
-    const blob = new Blob(chunks, { type: mime || 'video/webm' });
+    cancelLoop();
+    const ext = (rec.mimeType || mime).indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const blob = new Blob(chunks, { type: rec.mimeType || mime || 'video/webm' });
+    try { video.pause(); } catch (e) {}
     finishExport(blob, ext);
   };
 
   setExporting(true);
+  cancelLoop();                          // stop the normal preview loop while we drive playback
   $('exportProg').classList.add('on');
-  $('exportLabel').textContent = `Capturing Segment: ${fmtT(trimOut - trimIn)} (Real-time Layer)...`;
-  
-  video.currentTime = trimIn / 1000;
-  video.muted = true;
-  
-  video.onseeked = function onSeek() {
-    video.onseeked = null;
-    rec.start();
-    video.play();
-    
-    function driveRecorder() {
-      if (!exporting) return;
-      if (video.currentTime * 1000 >= trimOut || video.ended) { rec.stop(); return; }
-      
-      ctx.clearRect(0,0,W,H); ctx.drawImage(video,0,0,W,H);
-      if ($('show').checked) paintOsd(ctx, W, H, decoded.frames[frameAt(video.currentTime * 1000)]);
-      
-      let frac = (video.currentTime * 1000 - trimIn) / (trimOut - trimIn);
-      $('exportBar').style.width = (frac * 100) + "%";
-      $('exportPct').textContent = Math.round(frac * 100) + "%";
-      
-      requestAnimationFrame(driveRecorder);
-    }
-    requestAnimationFrame(driveRecorder);
+  $('exportLabel').textContent = `Burning overlay · ${fmtT(trimOut - trimIn)}${audioAdded ? " · with audio" : ""}…`;
+  $('exportBar').style.width = "0%"; $('exportPct').textContent = "0%";
+
+  const startS = trimIn / 1000, endS = trimOut / 1000;
+  await seekVideo(video, startS);        // robust — resolves even if already at startS
+
+  const drawFrame = () => {
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(video, 0, 0, W, H);
+    const ms = video.currentTime * 1000;
+    if ($('show').checked) paintOsd(ctx, W, H, decoded.frames[frameAt(ms)]);
+    if (srtCues && $('subShow').checked) { const cue = srtAt(srtCues, ms); if (cue && cue.text) paintSubCanvas(ctx, W, H, cue.text); }
   };
+
+  drawFrame();                           // prime first frame before recording starts
+  rec.start(250);                        // periodic chunks so a long clip can't lose everything
+
+  try { await video.play(); } catch (e) { showErr("Playback for capture was blocked: " + e.message); rec.stop(); setExporting(false); return; }
+
+  const loop = () => {
+    if (!exporting) return;
+    if (video.currentTime >= endS || video.ended) { if (rec.state !== 'inactive') rec.stop(); return; }
+    drawFrame();
+    const frac = (video.currentTime - startS) / Math.max(0.001, endS - startS);
+    $('exportBar').style.width = Math.min(100, frac * 100) + "%";
+    $('exportPct').textContent = Math.min(100, Math.round(frac * 100)) + "%";
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 }
 
 /* Primary Execution Entry point setup hook */
