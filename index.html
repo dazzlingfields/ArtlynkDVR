@@ -1134,6 +1134,20 @@ function parseMp4(ab) {
   const stbl = child(minf, 'stbl');
   if (!stbl) throw new Error("Technical track profile sample index metadata corrupted.");
 
+  // Media timescale (ticks/second) varies by firmware/muxer — e.g. legacy ArtLynk
+  // builds write 90000, newer firmware (FFmpeg-based Lavf muxer) writes 100000.
+  // Read it from mdhd rather than assuming a fixed value, so stts deltas convert
+  // to correct wall-clock seconds regardless of which firmware produced the file.
+  const mdhd = child(mdia, 'mdhd');
+  let timescale = 90000; // fallback matches legacy firmware if mdhd is ever absent
+  if (mdhd) {
+    const mb = mdhd.start + mdhd.hdr;
+    const mver = buf[mb];
+    const tsOff = mb + (mver === 1 ? 20 : 12); // v1: 8+8 byte times first; v0: 4+4
+    const t = u32(tsOff);
+    if (t > 0) timescale = t;
+  }
+
   const B = n => child(stbl, n);
   const sz = B('stsz'), co = B('stco'), c64 = B('co64'), sc = B('stsc'), ts = B('stts');
   if (!sz || (!co && !c64) || !sc || !ts) throw new Error("Malformed reference box topology trees inside atom vectors.");
@@ -1193,7 +1207,7 @@ function parseMp4(ab) {
       if (pos >= mdatSt && pos + len <= mdatEnd) {
         scanAnnexB(buf, pos, len, tSec * 1000, seiPackets);
       }
-      tSec += stts[i].d / 90000;
+      tSec += stts[i].d / timescale;
       sIdx++;
     }
   }
@@ -1937,6 +1951,19 @@ class MP4Demuxer {
     const mdia = child(trak, 'mdia'); const minf = child(mdia, 'minf'); const stbl = child(minf, 'stbl');
     const sz = child(stbl, 'stsz'), co = child(stbl, 'stco'), c64 = child(stbl, 'co64'), sc = child(stbl, 'stsc'), ts = child(stbl, 'stts');
 
+    // Same firmware-dependent timescale as parseMp4() above — read it from mdhd
+    // instead of assuming 90000, so decode/export timing stays correct for both
+    // legacy (90000) and newer (e.g. 100000) firmware recordings.
+    const mdhd = child(mdia, 'mdhd');
+    let timescale = 90000;
+    if (mdhd) {
+      const mb = mdhd.start + mdhd.hdr;
+      const mver = this.buf[mb];
+      const tsOff = mb + (mver === 1 ? 20 : 12);
+      const t = u32(tsOff);
+      if (t > 0) timescale = t;
+    }
+
     let o = sz.start + sz.hdr; const defSz = u32(o + 4), nSmp = u32(o + 8);
     const sizes = []; if (defSz === 0) { for(let i=0;i<nSmp;i++) sizes.push(u32(o+12+i*4)); } else { for(let i=0;i<nSmp;i++) sizes.push(defSz); }
 
@@ -1954,8 +1981,8 @@ class MP4Demuxer {
     let sIdx = 0, tSec = 0;
     for (let i = 0; i < stts.length; i++) {
       for (let j = 0; j < stts[i].n && sIdx < sizes.length; j++) {
-        this.samples.push({ idx: sIdx, size: sizes[sIdx], pts: tSec, duration: stts[i].d / 90000 });
-        tSec += stts[i].d / 90000; sIdx++;
+        this.samples.push({ idx: sIdx, size: sizes[sIdx], pts: tSec, duration: stts[i].d / timescale });
+        tSec += stts[i].d / timescale; sIdx++;
       }
     }
 
