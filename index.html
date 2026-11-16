@@ -766,14 +766,18 @@ function clearErr() { $('err').textContent = ""; $('err').classList.remove('on')
 $('toggleOsdSettingsBtn').addEventListener('click', () => {
   $('techDataPanel').classList.remove('open');
   $('toggleTechDataBtn').classList.remove('active');
-  $('osdSettingsPanel').classList.toggle('open');
-  $('toggleOsdSettingsBtn').classList.toggle('active');
+  $('toggleTechDataBtn').setAttribute('aria-expanded', 'false');
+  const open = $('osdSettingsPanel').classList.toggle('open');
+  $('toggleOsdSettingsBtn').classList.toggle('active', open);
+  $('toggleOsdSettingsBtn').setAttribute('aria-expanded', String(open));
 });
 $('toggleTechDataBtn').addEventListener('click', () => {
   $('osdSettingsPanel').classList.remove('open');
   $('toggleOsdSettingsBtn').classList.remove('active');
-  $('techDataPanel').classList.toggle('open');
-  $('toggleTechDataBtn').classList.toggle('active');
+  $('toggleOsdSettingsBtn').setAttribute('aria-expanded', 'false');
+  const open = $('techDataPanel').classList.toggle('open');
+  $('toggleTechDataBtn').classList.toggle('active', open);
+  $('toggleTechDataBtn').setAttribute('aria-expanded', String(open));
 });
 
 /* Drag and Drop Handling Hooks */
