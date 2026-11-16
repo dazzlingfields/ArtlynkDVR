@@ -392,8 +392,8 @@
   </div>
 
   <footer>
-    Hardware Processing Architecture Decodes System User Data SEI Arrays (UUID bde945dc…) Matching Packaged MSP DisplayPort Protocols Locally.<br>
-    All processes deploy isolated locally. Outputs comply cleanly with Walksnail layout conventions (.osd).
+    Reads ArtLynk SEI metadata and MSP DisplayPort data from your recording.<br>
+    Video processing stays in your browser.
   </footer>
 </div>
 
@@ -1079,7 +1079,12 @@ async function handleVideo(file) {
       initTrim(d * 1000);
       draw();
     };
-    video.onerror = () => { throw new Error("Browser engine canvas pipeline error displaying element source."); };
+    video.onerror = () => {
+      showErr("Could not play this video. Try an H.264 encoded MP4 or MOV file.");
+      drop.classList.remove('hidden');
+      stage.classList.remove('on');
+      $('osdBtn').disabled = true;
+    };
   } catch (e) {
     showErr(e.message);
     drop.classList.remove('hidden');
