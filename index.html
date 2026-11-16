@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ArtLynk OSD — DVR overlay</title>
+<title>ArtLynk DVR | OSD viewer</title>
 <style>
   :root {
     --void: #090b0e;
@@ -30,9 +30,9 @@
   /* Media-First Header */
   header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 32px; border-bottom: 1px solid var(--line-soft); padding-bottom: 24px; }
   .brand { display: flex; flex-direction: column; gap: 4px; }
-  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .3em; color: var(--link); text-transform: uppercase; }
-  h1 { font-family: var(--mono); font-weight: 600; font-size: 28px; letter-spacing: .01em; margin: 0; text-transform: uppercase; }
-  h1 .dim { color: var(--faint); }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--link); text-transform: uppercase; }
+  h1 { font-family: var(--sans); font-weight: 650; font-size: 30px; letter-spacing: -.03em; margin: 0; }
+  h1 .dim { color: var(--muted); font-weight: 500; }
   .tag { color: var(--muted); font-size: 14px; max-width: 60ch; margin: 6px 0 0; }
   .priv { font-family: var(--mono); font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 8px; }
   .priv::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--link); }
@@ -40,14 +40,14 @@
   /* Fluid Intake Dropzone */
   .drop {
     border: 1px dashed var(--line); border-radius: 12px; background: var(--panel);
-    padding: 80px 40px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s, transform .2s;
+    padding: 56px 32px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s, transform .2s;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
   .drop:hover, .drop.hot { border-color: var(--link); background: #141c24; }
   .drop-alt { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
   .drop-alt-note { font-family: var(--mono); font-size: 11px; color: var(--faint); }
   .drop-alt-note b { color: var(--muted); font-weight: 600; }
-  .drop .big { font-family: var(--mono); font-size: 16px; letter-spacing: .05em; text-transform: uppercase; }
+  .drop .big { font-family: var(--sans); font-size: 16px; font-weight: 600; letter-spacing: 0; }
   .drop .sub { color: var(--muted); font-size: 13px; margin-top: 10px; max-width: 440px; }
   .drop .reticle { width: 40px; height: 40px; margin-bottom: 20px; position: relative; opacity: .7; }
   .drop .reticle::before, .drop .reticle::after { content: ""; position: absolute; background: var(--link); }
@@ -80,8 +80,8 @@
   .screen { position: relative; border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--line); }
   .screen video { display: block; width: 100%; height: auto; }
   .screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .screen .grain { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: overlay; opacity: .4; background: repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px); }
-  .screen .vig { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 100px rgba(0,0,0,.6); }
+  
+  
 
   /* Subtitle Elements */
   .screen .subbar { position: absolute; left: 0; right: 0; bottom: 4%; display: none; justify-content: center; pointer-events: none; padding: 0 8%; }
@@ -135,7 +135,7 @@
   .switch input:checked + .track::after { transform: translateX(16px); background: var(--link); }
 
   /* Professional Monochromatic Buttons */
-  .btn { appearance: none; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); font-family: var(--mono); font-size: 12px; padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: border-color .15s, color .15s; display: inline-flex; align-items: center; gap: 6px; }
+  .btn { appearance: none; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); font-family: var(--sans); font-size: 13px; padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: border-color .15s, color .15s; display: inline-flex; align-items: center; gap: 6px; }
   .btn:hover { border-color: var(--link); color: var(--link); }
   .btn.active { border-color: var(--link); background: rgba(25, 240, 200, 0.05); color: var(--link); }
   .btn.accent-btn { background: var(--link); color: var(--void); border-color: var(--link); font-weight: 600; }
@@ -153,7 +153,7 @@
   /* Refined Timelining and Multi-range Trimming HUD */
   .timeline-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; margin-top: 12px; }
   .timeline-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .timeline-title { font-family: var(--mono); font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.1em; margin: 0; }
+  .timeline-title { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: 0; margin: 0; }
   .trim-track { position: relative; height: 28px; border-radius: 4px; background: var(--void); border: 1px solid var(--line-soft); cursor: pointer; background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, .015) 0 1px, transparent 1px 5%); }
   .trim-range { position: absolute; top: 0; bottom: 0; background: rgba(25, 240, 200, 0.08); border-left: 1.5px solid var(--link); border-right: 1.5px solid var(--link); }
   .trim-handle { position: absolute; top: 0; bottom: 0; width: 10px; margin-left: -5px; background: var(--line); border: 1px solid var(--muted); border-radius: 2px; cursor: ew-resize; }
@@ -203,32 +203,32 @@
 <div class="wrap">
   <header>
     <div class="brand">
-      <span class="eyebrow">BetaFPV · P1 ArtLynk Toolchain</span>
+      <span class="eyebrow">ArtLynk · DVR tools</span>
       <h1>OSD <span class="dim">Decoder</span></h1>
-      <p class="tag">Rebuild high-definition Betaflight graphical overlays straight from your hardware DVR recording's embedded SEI metadata.</p>
+      <p class="tag">Preview, adjust, and export the OSD from an ArtLynk DVR recording.</p>
     </div>
-    <span class="priv">Local Sandbox Security</span>
+    <span class="priv">Processed locally</span>
   </header>
 
   <label id="drop" for="file" class="drop" tabindex="0" role="button" aria-label="Select or drop an ArtLynk recording">
     <div class="reticle"></div>
-    <div class="big">Load ArtLynk recording (.mp4)</div>
-    <div class="sub">Choose a DVR recording, or drop a video and its matching SRT subtitle file here. Files stay in your browser.</div>
+    <div class="big">Open a recording</div>
+    <div class="sub">Choose an MP4 or MOV recording. Add its matching SRT file to show flight telemetry. Files stay in your browser.</div>
   </label>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div class="drop-alt">
-    <button class="btn" id="folderBtn" type="button">Scan a folder for clips</button>
+    <button class="btn" id="folderBtn" type="button">Browse an SD card folder</button>
     <button class="btn hidden" id="linkBtn" type="button">Link folder for auto-SRT</button>
-    <span class="drop-alt-note">Point at your SD-card folder — each <b>.mp4</b> is auto-paired with its matching <b>.srt</b></span>
+    <span class="drop-alt-note">Find clips and pair each <b>.mp4</b> with its matching <b>.srt</b> file.</span>
   </div>
   <input id="folderFile" type="file" webkitdirectory directory class="hidden" />
   <div id="err" class="err"></div>
   <div id="banner" class="banner hidden"></div>
 
   <div id="loader" class="loader">
-    <div class="lt"><span id="loaderTitle">Analyzing stream tracks…</span><span class="pct" id="loaderPct"></span></div>
+    <div class="lt"><span id="loaderTitle">Loading recording…</span><span class="pct" id="loaderPct"></span></div>
     <div class="prog" id="prog"><i id="progBar"></i></div>
-    <div class="ls" id="loaderSub">Extracting non-destructive asynchronous frames locally.</div>
+    <div class="ls" id="loaderSub">Reading the video and extracting OSD data in your browser.</div>
   </div>
 
   <div id="stage" class="stage">
@@ -247,8 +247,7 @@
       <video id="video" controls playsinline></video>
       <canvas id="osd"></canvas>
       <div class="subbar" id="subbar"><span id="subtext"></span></div>
-      <div class="grain"></div>
-      <div class="vig"></div>
+      
     </div>
 
     <div id="strip" class="strip">
@@ -266,7 +265,7 @@
       </div>
       <div class="tcell">
         <div class="ticon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 10v4"/><path d="M6 12h6"/></svg></div>
-        <div class="tv" id="t_sbat">—</div><div class="tl">Craft Batt</div>
+        <div class="tv" id="t_sbat">—</div><div class="tl">Battery</div>
       </div>
       <div class="tcell">
         <div class="ticon"><svg viewBox="0 0 24 24"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg></div>
@@ -292,11 +291,11 @@
     <div class="hud-controls">
       <div class="hud-actions-row">
         <div class="hud-group">
-          <label class="switch"><input id="show" type="checkbox" checked><span class="track"></span></label>
-          <span style="font-size:13px; font-family:var(--mono)">OSD</span>
+          <label class="switch"><input id="show" type="checkbox" checked aria-label="Show OSD overlay"><span class="track"></span></label>
+          <span style="font-size:13px; font-family:var(--mono)">Show OSD</span>
           
-          <label class="switch" style="margin-left: 8px;"><input id="subShow" type="checkbox" disabled><span class="track"></span></label>
-          <span style="font-size:13px; font-family:var(--mono)">Subtitles</span>
+          <label class="switch" style="margin-left: 8px;"><input id="subShow" type="checkbox" disabled aria-label="Show subtitles"><span class="track"></span></label>
+          <span style="font-size:13px; font-family:var(--mono)">Show subtitles</span>
 
           <button class="btn" id="brBtn" style="margin-left: 12px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h3l2 6 4-14 3 10 2-4h4"/></svg>
@@ -305,16 +304,16 @@
         </div>
         
         <div class="hud-group">
-          <button class="btn" id="toggleOsdSettingsBtn">
+          <button class="btn" id="toggleOsdSettingsBtn" aria-expanded="false" aria-controls="osdSettingsPanel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/><circle cx="12" cy="12" r="4"/></svg>
-            Configuration
+            OSD settings
           </button>
-          <button class="btn" id="toggleTechDataBtn">
+          <button class="btn" id="toggleTechDataBtn" aria-expanded="false" aria-controls="techDataPanel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h20v14H2zM2 7h20M12 17v4M8 21h8"/></svg>
-            Telemetry Log
+            Recording details
           </button>
-          <button class="btn" id="osdBtn" disabled>Save .osd</button>
-          <button class="btn" id="newBtn">Reset Workspace</button>
+          <button class="btn" id="osdBtn" disabled>Download .osd file</button>
+          <button class="btn" id="newBtn">New recording</button>
         </div>
       </div>
 
@@ -328,15 +327,15 @@
           </div>
           <div>
             <p class="fontline">
-              <b>Matrix Font State:</b> <span id="fontStatus">system base dynamic characters</span><br>
-              Automatic high-resolution pairing falls back safely to neighboring paths (e.g. 720p/1080p asset textures).
+              <b>OSD font:</b> <span id="fontStatus">Built-in fallback</span><br>
+              The font is matched to the video resolution. Load a PNG below to use a different font.
             </p>
             <div style="font-size: 11px; font-family: var(--mono); color: var(--muted); margin-bottom: 12px;">
-              SRT Mapping Info: <span id="srtStatus">none detected</span>
+              SRT file: <span id="srtStatus">Not loaded</span>
             </div>
             <div class="btn-row" style="display:flex; gap:8px;">
-              <button class="btn" id="fontBtn">Import Font PNG</button>
-              <button class="btn" id="srtBtn">Import SRT Log</button>
+              <button class="btn" id="fontBtn">Load font PNG</button>
+              <button class="btn" id="srtBtn">Load SRT file</button>
             </div>
           </div>
         </div>
@@ -346,12 +345,12 @@
 
       <div id="techDataPanel" class="drawer">
         <div class="stats-minimal">
-          <div class="stat-mini"><div class="k">Firmware Track</div><div class="v link" id="sFw">—</div></div>
-          <div class="stat-mini"><div class="k">OSD Frame Iterations</div><div class="v" id="sFrames">—</div></div>
-          <div class="stat-mini"><div class="k">Source Duration</div><div class="v" id="sDur">—</div></div>
-          <div class="stat-mini"><div class="k">Raster Dimension</div><div class="v" id="sRes">—</div></div>
-          <div class="stat-mini"><div class="k">Base Frequency Rate</div><div class="v" id="sHz">—</div></div>
-          <div class="stat-mini"><div class="k">Character Topology Grid</div><div class="v">53 × 20</div></div>
+          <div class="stat-mini"><div class="k">Firmware</div><div class="v link" id="sFw">—</div></div>
+          <div class="stat-mini"><div class="k">OSD frames</div><div class="v" id="sFrames">—</div></div>
+          <div class="stat-mini"><div class="k">Duration</div><div class="v" id="sDur">—</div></div>
+          <div class="stat-mini"><div class="k">Resolution</div><div class="v" id="sRes">—</div></div>
+          <div class="stat-mini"><div class="k">OSD frame rate</div><div class="v" id="sHz">—</div></div>
+          <div class="stat-mini"><div class="k">OSD grid</div><div class="v">53 × 20</div></div>
         </div>
       </div>
     </div>
@@ -386,14 +385,14 @@
 
       <p class="trim-hint">Drag the handles or use arrow keys. Set in/out uses the current playhead.</p>
       <div class="export-prog" id="exportProg">
-        <div class="lt"><span id="exportLabel">Baking spatial attributes…</span><span class="pct" id="exportPct"></span></div>
+        <div class="lt"><span id="exportLabel">Preparing export…</span><span class="pct" id="exportPct"></span></div>
         <div class="prog"><i id="exportBar"></i></div>
-        <div class="ls" id="exportSub">Encoding frame indices sequentially. Ensure browser window stays prioritized.</div>
+        <div class="ls" id="exportSub">Keep this tab open while the video is exported.</div>
       </div>
       
-      <a id="dlLink" class="dl hidden" download>Download Rendered Master File</a>
+      <a id="dlLink" class="dl hidden" download>Download video</a>
       <p class="fontline" id="exportNote" style="margin-top:14px; margin-bottom:0;">
-        Executes high-speed frame-accurate multi-pass rendering (via WebCodecs container packaging) directly matching hardware display arrays natively (OSD<span id="exNoteSub"></span>).
+        Exports the trimmed section with the OSD and subtitles currently enabled.
       </p>
     </div>
   </div>
@@ -1008,7 +1007,7 @@ async function handleFiles(files) {
 }
 
 function showLoader(title) {
-  $('loaderTitle').textContent = title || "Analyzing track payloads…";
+  $('loaderTitle').textContent = title || "Loading recording…";
   $('loaderPct').textContent = "";
   prog.classList.remove('indet');
   progBar.style.width = "0%";
@@ -1030,7 +1029,7 @@ function readWithProgress(file) {
     const fr = new FileReader();
     fr.onprogress = e => { if (e.lengthComputable) setProgress(e.loaded / e.total * 0.85); };
     fr.onload = () => resolve(fr.result);
-    fr.onerror = () => reject(new Error("File stream transfer interdiction error."));
+    fr.onerror = () => reject(new Error("Couldn't read this file."));
     fr.readAsArrayBuffer(file);
   });
 }
@@ -1124,7 +1123,7 @@ function parseMp4(ab) {
   const child = (b, n) => boxes(b.start + b.hdr, b.end).find(x => x.type === n);
   const top = boxes(0, buf.length);
   const moov = top.find(b => b.type === 'moov');
-  if (!moov) throw new Error("No usable root moov structure present inside this MP4 container.");
+  if (!moov) throw new Error("This file doesn't contain a readable MP4 video track.");
   
   const trak = boxes(moov.start + moov.hdr, moov.end).find(t => {
     const mdia = child(t, 'mdia'); if (!mdia) return false;
@@ -1164,7 +1163,7 @@ function parseMp4(ab) {
 
   const B = n => child(stbl, n);
   const sz = B('stsz'), co = B('stco'), c64 = B('co64'), sc = B('stsc'), ts = B('stts');
-  if (!sz || (!co && !c64) || !sc || !ts) throw new Error("Malformed reference box topology trees inside atom vectors.");
+  if (!sz || (!co && !c64) || !sc || !ts) throw new Error("This MP4 uses an unsupported video layout.");
 
   let o = sz.start + sz.hdr;
   const defSz = u32(o + 4);
@@ -1393,7 +1392,7 @@ function handleSrt(file, auto) {
     try {
       const cues = parseSrt(fr.result);
       applySrt(cues, file.name, auto);
-    } catch(err) { showErr("Telemetry validation layout alignment rejection: " + err.message); }
+    } catch(err) { showErr("Couldn't read the SRT file: " + err.message); }
   };
   fr.readAsText(file);
 }
@@ -1440,7 +1439,7 @@ function applySrt(cues, name, auto) {
   buildBitrateSeries(cues);
   const sub = $('subShow'); sub.disabled = false; sub.checked = true;
   const tag = auto ? "auto-detected · " : "";
-  $('srtStatus').textContent = `${tag}${name} · ${cues.length} arrays mapping`;
+  $('srtStatus').textContent = `${tag}${name} · ${cues.length} cues`;
   if (durMs) updateTrimUI();
   $('strip').classList.add('on');
   updateStrip(video.currentTime * 1000 || 0);
@@ -1734,7 +1733,7 @@ function initTrim(d) {
   trimIn = 0;
   trimOut = durMs;
   updateTrimUI();
-  $('exNoteSub').textContent = srtCues ? " + telemetry from SRT" : "";
+  
 }
 function updateTrimUI() {
   if (!(durMs > 0)) return;
@@ -2132,7 +2131,7 @@ async function exportMediaRecorder() {
   setExporting(true);
   cancelLoop();                          // stop the normal preview loop while we drive playback
   $('exportProg').classList.add('on');
-  $('exportLabel').textContent = `Burning overlay · ${fmtT(trimOut - trimIn)}${audioAdded ? " · with audio" : ""}…`;
+  $('exportLabel').textContent = `Exporting ${fmtT(trimOut - trimIn)}${audioAdded ? " · with audio" : ""}…`;
   $('exportBar').style.width = "0%"; $('exportPct').textContent = "0%";
 
   const startS = trimIn / 1000, endS = trimOut / 1000;
@@ -2149,7 +2148,7 @@ async function exportMediaRecorder() {
   drawFrame();                           // prime first frame before recording starts
   rec.start(250);                        // periodic chunks so a long clip can't lose everything
 
-  try { await video.play(); } catch (e) { showErr("Playback for capture was blocked: " + e.message); rec.stop(); setExporting(false); return; }
+  try { await video.play(); } catch (e) { showErr("Couldn't start video playback: " + e.message); rec.stop(); setExporting(false); return; }
 
   const loop = () => {
     if (!exporting) return;
