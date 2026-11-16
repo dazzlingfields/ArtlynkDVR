@@ -16,6 +16,7 @@
     --faint: #5d6974;
     --link: #19f0c8;       /* FPV link cyan */
     --warn: #ffb020;       /* failsafe amber */
+    --bg: #0d1116;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
@@ -108,7 +109,7 @@
 
   /* Control Dashboard Layout */
   .hud-controls { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .hud-actions-row { display: flex; items-content: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; }
+  .hud-actions-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; }
   .hud-group { display: flex; align-items: center; gap: 16px; }
 
   /* Drawer Toggles & Utilities */
@@ -126,7 +127,8 @@
 
   /* Compact Switches */
   .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-  .switch input { display: none; }
+  .switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--link); outline-offset: 3px; }
   .switch .track { width: 34px; height: 18px; border-radius: 9px; background: var(--line); position: relative; transition: background .15s; }
   .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--faint); transition: transform .15s, background .15s; }
   .switch input:checked + .track { background: rgba(25, 240, 200, 0.2); }
@@ -202,10 +204,10 @@
     <span class="priv">Local Sandbox Security</span>
   </header>
 
-  <label id="drop" for="file" class="drop" tabindex="0" role="button" aria-label="Select or drop high-definition media file targets">
+  <label id="drop" for="file" class="drop" tabindex="0" role="button" aria-label="Select or drop an ArtLynk recording">
     <div class="reticle"></div>
     <div class="big">Load ArtLynk recording (.mp4)</div>
-    <div class="sub">Select or drag standard telemetry logs or pairs together. All calculations execute isolated locally inside the browser environment.</div>
+    <div class="sub">Choose a DVR recording, or drop a video and its matching SRT subtitle file here. Files stay in your browser.</div>
   </label>
   <input id="file" type="file" accept="video/mp4,video/quicktime,video/*,.srt" multiple class="hidden" />
   <div class="drop-alt">
@@ -1781,7 +1783,7 @@ function downloadBlob(blob, filename, linkEl) {
   } catch(e) { clicked = false; }
   if (linkEl) {
     linkEl.href = url; linkEl.download = filename;
-    linkEl.textContent = `Download Completed Document Target: ${filename} (${(blob.size / 1048576).toFixed(1)} MB)`;
+    linkEl.textContent = `Download ${filename} (${(blob.size / 1048576).toFixed(1)} MB)`;
     linkEl.classList.remove('hidden');
   }
   return { url, clicked };
@@ -1831,7 +1833,7 @@ function finishExport(blob, ext) {
   setExporting(false);
   const outName = baseStem(currentName) + "_burn." + ext;
   const { clicked } = downloadBlob(blob, outName, $('dlLink'));
-  if (clicked) $('exportSub').textContent = `Master print target output processed successfully: ${outName}`;
+  if (clicked) $('exportSub').textContent = `Export ready: ${outName}`;
   try { paint(); } catch (e) {}
 }
 
@@ -2104,7 +2106,7 @@ async function exportMediaRecorder() {
 /* Primary Execution Entry point setup hook */
 (async function initStudioEnvironment() {
   if (EMBEDDED) {
-    $('banner').innerHTML = "<b>Isolated Window Notice:</b> Elements operational inside isolated runtime. Ensure local tab visibility for downloads.";
+    $('banner').innerHTML = "<b>Embedded browser:</b> Downloads may open in a new tab.";
     $('banner').classList.remove('hidden');
   }
 })();
