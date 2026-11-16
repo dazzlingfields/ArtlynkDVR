@@ -163,6 +163,12 @@
   .trim-play { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--warn); pointer-events: none; left: 0; }
   .trim-times { display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
   .trim-times b { color: var(--link); font-weight: normal; }
+  .trim-hint { margin: 10px 0 0; color: var(--faint); font-size: 11px; }
+  @media (max-width: 600px) {
+    .timeline-card { padding: 14px; }
+    .timeline-header { align-items: flex-start; flex-direction: column; gap: 8px; }
+    .trim-times { width: 100%; margin: 0; font-size: 10px; }
+  }
 
   /* Global Overlay & Utility Notifications */
   .fontline { font-size: 12px; color: var(--muted); margin: 0 0 14px; line-height: 1.5; }
@@ -352,32 +358,33 @@
 
     <div class="timeline-card">
       <div class="timeline-header">
-        <h2 class="timeline-title">Linear Video Editing Timeline &amp; Compositing</h2>
+        <h2 class="timeline-title">Trim clip</h2>
         <div class="trim-times">
-          <span>In-point <b id="tIn">0:00.0</b></span>
-          <span style="margin: 0 16px;" id="tLen">Full Track Scope</span>
-          <span>Out-point <b id="tOut">0:00.0</b></span>
+          <span>In <b id="tIn">0:00.0</b></span>
+          <span id="tLen">Full clip</span>
+          <span>Out <b id="tOut">0:00.0</b></span>
         </div>
       </div>
       
       <div class="trim" id="trim" style="margin-bottom: 16px;">
         <div class="trim-track" id="trimTrack">
           <div class="trim-range" id="trimRange"></div>
-          <div class="trim-handle in" id="trimIn" tabindex="0" role="slider" aria-label="Trim section entry bound"></div>
-          <div class="trim-handle out" id="trimOut" tabindex="0" role="slider" aria-label="Trim section terminal bound"></div>
+          <div class="trim-handle in" id="trimIn" tabindex="0" role="slider" aria-label="Clip start" aria-orientation="horizontal"></div>
+          <div class="trim-handle out" id="trimOut" tabindex="0" role="slider" aria-label="Clip end" aria-orientation="horizontal"></div>
           <div class="trim-play" id="trimPlay"></div>
         </div>
       </div>
       
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
         <div style="display:flex; gap:8px;">
-          <button class="btn" id="setIn">Set Entry ⤓</button>
-          <button class="btn" id="setOut">Set Exit ⤒</button>
-          <button class="btn" id="trimReset">Clear Range</button>
+          <button class="btn" id="setIn">Set in</button>
+          <button class="btn" id="setOut">Set out</button>
+          <button class="btn" id="trimReset">Reset</button>
         </div>
-        <button class="btn accent-btn" id="exportBtn" disabled>Process Master Render</button>
+        <button class="btn accent-btn" id="exportBtn" disabled>Export trimmed video</button>
       </div>
 
+      <p class="trim-hint">Drag the handles or use arrow keys. Set in/out uses the current playhead.</p>
       <div class="export-prog" id="exportProg">
         <div class="lt"><span id="exportLabel">Baking spatial attributes…</span><span class="pct" id="exportPct"></span></div>
         <div class="prog"><i id="exportBar"></i></div>
@@ -1723,44 +1730,92 @@ function fmtT(ms) {
   return m + ":" + (s % 60).toFixed(1).padStart(4, '0');
 }
 function initTrim(d) {
-  durMs = d || 0; trimIn = 0; trimOut = durMs;
+  durMs = Number.isFinite(d) ? Math.max(0, d) : 0;
+  trimIn = 0;
+  trimOut = durMs;
   updateTrimUI();
-  $('exNoteSub').textContent = srtCues ? " + injected telemetry parameters" : "";
+  $('exNoteSub').textContent = srtCues ? " + telemetry from SRT" : "";
 }
 function updateTrimUI() {
-  if (!durMs) return;
-  let a = trimIn / durMs * 100, b = trimOut / durMs * 100;
-  trimRange.style.left = a + "%"; trimRange.style.width = (b - a) + "%";
-  trimInH.style.left = a + "%"; trimOutH.style.left = b + "%";
-  $('tIn').textContent = fmtT(trimIn); $('tOut').textContent = fmtT(trimOut);
-  $('tLen').textContent = `Selection: ${( (trimOut - trimIn) / 1000 ).toFixed(1)}s`;
+  if (!(durMs > 0)) return;
+  const a = trimIn / durMs * 100;
+  const b = trimOut / durMs * 100;
+  trimRange.style.left = a + "%";
+  trimRange.style.width = Math.max(0, b - a) + "%";
+  trimInH.style.left = a + "%";
+  trimOutH.style.left = b + "%";
+  trimInH.setAttribute('aria-valuemin', '0');
+  trimInH.setAttribute('aria-valuemax', String(Math.max(0, trimOut - minTrimMs())));
+  trimInH.setAttribute('aria-valuenow', String(Math.round(trimIn)));
+  trimInH.setAttribute('aria-valuetext', fmtT(trimIn));
+  trimOutH.setAttribute('aria-valuemin', String(Math.min(durMs, trimIn + minTrimMs())));
+  trimOutH.setAttribute('aria-valuemax', String(durMs));
+  trimOutH.setAttribute('aria-valuenow', String(Math.round(trimOut)));
+  trimOutH.setAttribute('aria-valuetext', fmtT(trimOut));
+  $('tIn').textContent = fmtT(trimIn);
+  $('tOut').textContent = fmtT(trimOut);
+  $('tLen').textContent = `Length ${((trimOut - trimIn) / 1000).toFixed(1)}s`;
 }
 
-// Drag logic matching precise timeline tracks
+function minTrimMs() { return Math.min(100, durMs); }
+function clampTrimTime(ms) {
+  const value = Number.isFinite(ms) ? ms : 0;
+  return Math.min(durMs, Math.max(0, value));
+}
+function setTrimPoint(edge, requestedMs) {
+  if (!(durMs > 0)) return;
+  const ms = clampTrimTime(requestedMs);
+  const min = minTrimMs();
+  if (edge === 'in') {
+    trimIn = Math.max(0, Math.min(ms, trimOut - min));
+  } else {
+    trimOut = Math.min(durMs, Math.max(ms, trimIn + min));
+  }
+  updateTrimUI();
+}
+function trackTimeAt(clientX) {
+  const rect = trimTrack.getBoundingClientRect();
+  if (!(rect.width > 0) || !(durMs > 0)) return null;
+  const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  return fraction * durMs;
+}
+
+// Keep the handles within the clip even when a drag moves outside the track.
 let activeHandle = null;
 function handleTrackPointer(e) {
-  let rect = trimTrack.getBoundingClientRect();
-  let pct = (e.clientX - rect.left) / rect.width;
-  let ms = Math.min(durMs, Math.max(0, pct * durMs));
-  if (activeHandle === 'in') { trimIn = Math.min(trimOut - 100, ms); updateTrimUI(); }
-  else if (activeHandle === 'out') { trimOut = Math.max(trimIn + 100, ms); updateTrimUI(); }
+  if (!activeHandle) return;
+  const ms = trackTimeAt(e.clientX);
+  if (ms != null) setTrimPoint(activeHandle, ms);
 }
 window.addEventListener('pointerup', () => { activeHandle = null; });
+window.addEventListener('pointercancel', () => { activeHandle = null; });
 window.addEventListener('pointermove', e => { if (activeHandle) handleTrackPointer(e); });
 trimInH.onpointerdown = e => { e.preventDefault(); activeHandle = 'in'; };
 trimOutH.onpointerdown = e => { e.preventDefault(); activeHandle = 'out'; };
 
+function handleTrimKey(e, edge) {
+  const step = e.shiftKey ? 1000 : 100;
+  let next = edge === 'in' ? trimIn : trimOut;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next -= step;
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next += step;
+  else if (e.key === 'Home') next = edge === 'in' ? 0 : trimIn + minTrimMs();
+  else if (e.key === 'End') next = edge === 'out' ? durMs : trimOut - minTrimMs();
+  else return;
+  e.preventDefault();
+  setTrimPoint(edge, next);
+}
+trimInH.addEventListener('keydown', e => handleTrimKey(e, 'in'));
+trimOutH.addEventListener('keydown', e => handleTrimKey(e, 'out'));
+
 trimTrack.onpointerdown = e => {
   if (e.target === trimInH || e.target === trimOutH) return;
-  let rect = trimTrack.getBoundingClientRect();
-  let ms = ((e.clientX - rect.left) / rect.width) * durMs;
-  if (Math.abs(ms - trimIn) < Math.abs(ms - trimOut)) { trimIn = Math.min(trimOut - 100, ms); }
-  else { trimOut = Math.max(trimIn + 100, ms); }
-  updateTrimUI();
+  const ms = trackTimeAt(e.clientX);
+  if (ms == null) return;
+  setTrimPoint(Math.abs(ms - trimIn) <= Math.abs(ms - trimOut) ? 'in' : 'out', ms);
 };
 
-$('setIn').onclick = () => { trimIn = video.currentTime * 1000; trimIn = Math.min(trimOut - 100, trimIn); updateTrimUI(); };
-$('setOut').onclick = () => { trimOut = video.currentTime * 1000; trimOut = Math.max(trimIn + 100, trimOut); updateTrimUI(); };
+$('setIn').onclick = () => setTrimPoint('in', video.currentTime * 1000);
+$('setOut').onclick = () => setTrimPoint('out', video.currentTime * 1000);
 $('trimReset').onclick = () => { trimIn = 0; trimOut = durMs; updateTrimUI(); };
 
 /* Non-Destructive Data Asset Compilers (.OSD Format Writes) */
